@@ -307,7 +307,8 @@ export class WalletService {
     const res = await w.accountsSend({
       walletSecret,
       accountId: this.requireAccount().accountId,
-      priorityFeeSompi: 0n,
+      // No priorityFeeSompi: a sweep (no destination) only accepts Fees::None.
+      // Passing 0n is read by the SDK as Fees::SenderPays(0) and rejected.
     });
     this.scheduleHistoryRefresh();
     return res.transactionIds;

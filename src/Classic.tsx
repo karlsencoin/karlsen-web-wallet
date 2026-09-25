@@ -1,6 +1,7 @@
 // Main wallet screen in the classic layout of the old wallet.karlsencoin.org PWA:
 // left column = balance, receive address, QR, SEND / Scan QR, status;
 // right column = TRANSACTIONS / WALLET / NETWORK / DEBUG tabs.
+import { copyText } from './clipboard';
 import { useEffect, useRef, useState } from 'react';
 import QRCode from 'qrcode';
 import type { ITransactionRecord } from './karlsen-sdk';
@@ -110,12 +111,7 @@ function ReceiveBlock({ t, address }: { t: T; address?: string }) {
   }, [address]);
   if (!address) return null;
   const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(address);
-    } catch {
-      // Clipboard API needs a secure context; fall back to a selectable prompt.
-      window.prompt(t('copy'), address);
-    }
+    if (!(await copyText(address))) window.prompt(t('copy'), address);
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   };
