@@ -317,6 +317,8 @@ export class WalletService {
       vaultAddress,
       amountSompi,
       solanaDestination,
+      // A payment with an output needs an explicit fee source; 0n = SenderPays(0).
+      priorityFeeSompi: 0n,
       ...(feeRate ? { feeRate } : {}),
     });
     this.scheduleHistoryRefresh();
