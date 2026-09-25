@@ -32,6 +32,12 @@ export const FEATURES = {
   bridge: import.meta.env.VITE_FEATURE_BRIDGE === 'true',
 };
 
+/** Bridge daemon public API base URL, without trailing slash. */
+export const BRIDGE_API_URL = ((import.meta.env.VITE_BRIDGE_API_URL as string | undefined) ?? '').replace(/\/+$/, '');
+
+/** Appended to Solana explorer links (cluster selection for test validators). */
+export const SOLANA_EXPLORER_SUFFIX = (import.meta.env.VITE_SOLANA_EXPLORER_SUFFIX as string | undefined) ?? '';
+
 /** Storage file name used by the SDK wallet runtime (one wallet per browser for now). */
 export const WALLET_FILENAME = 'karlsen-web-wallet';
 

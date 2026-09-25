@@ -301,6 +301,28 @@ export class WalletService {
     return res.transactionIds;
   }
 
+  /**
+   * Bridge deposit: pays the bridge deposit address and signs the deposit
+   * intent inside WASM with the key of an input address (keys never reach JS).
+   * Needs the SDK built from rusty-karlsen feat/wallet-bridge-sign-message.
+   */
+  async bridgeDeposit(walletSecret: string, vaultAddress: string, amountSompi: bigint, solanaDestination: string, feeRate?: number): Promise<BridgeDepositResult> {
+    const w = this.requireWallet() as unknown as { accountsBridgeDeposit?: (req: unknown) => Promise<BridgeDepositResult> };
+    if (typeof w.accountsBridgeDeposit !== 'function') {
+      throw new Error('This wallet build has no bridge support (SDK without accountsBridgeDeposit).');
+    }
+    const res = await w.accountsBridgeDeposit({
+      walletSecret,
+      accountId: this.requireAccount().accountId,
+      vaultAddress,
+      amountSompi,
+      solanaDestination,
+      ...(feeRate ? { feeRate } : {}),
+    });
+    this.scheduleHistoryRefresh();
+    return res;
+  }
+
   /** Compounds all UTXOs of the account into a single change output. */
   async compound(walletSecret: string): Promise<string[]> {
     const w = this.requireWallet();
@@ -522,6 +544,23 @@ export class WalletService {
 }
 
 /** Human-friendly amount and direction for a transaction record. */
+/** Result of Wallet.accountsBridgeDeposit (subset used by the UI). */
+export interface BridgeDepositResult {
+  transactionIds: string[];
+  intent: {
+    networkId: string;
+    karlsenTxId: string;
+    vaultAddress: string;
+    amountSompi: bigint;
+    solanaDestination: string;
+    timestampMs: bigint;
+  };
+  intentMessage: string;
+  signerAddress: unknown;
+  publicKey: string;
+  signature: string;
+}
+
 export function txSummary(tx: ITransactionRecord): { direction: 'in' | 'out' | 'self'; value: bigint } {
   const t = tx.data?.type as string;
   const d = tx.data?.data as any;

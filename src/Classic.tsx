@@ -9,6 +9,7 @@ import { HISTORY_PAGE_SIZE, txSummary, type DagInfo, type WalletService, type Wa
 import { APP_VERSION, DONATION_ADDRESS, FEATURES, LANGUAGES, saveSettings, type Settings } from './config';
 import type { TKey } from './i18n';
 import { LegacyMigrate } from './LegacyMigrate';
+import { BridgeDialog } from './Bridge';
 
 // Karlsen explorer is a kaspa-explorer fork: /txs/<id>.
 export const EXPLORER_TX_URL = 'https://explorer.karlsencoin.org/txs/';
@@ -67,7 +68,7 @@ export function Main({ t, service, state, settings }: { t: T; service: WalletSer
       </section>
 
       {dialog && (
-        <Modal onClose={close} t={t} wide={dialog.kind === 'legacy' || dialog.kind === 'utxos'}>
+        <Modal onClose={close} t={t} wide={dialog.kind === 'legacy' || dialog.kind === 'utxos' || dialog.kind === 'bridge'}>
           {dialog.kind === 'send' && <Send t={t} service={service} state={state} initialTo={dialog.to} initialAmount={dialog.amount} onDone={close} />}
           {dialog.kind === 'scan' && <QrScan t={t} onResult={(to, amount) => setDialog({ kind: 'send', to, amount })} />}
           {dialog.kind === 'compound' && <CompoundDialog t={t} service={service} />}
@@ -76,12 +77,7 @@ export function Main({ t, service, state, settings }: { t: T; service: WalletSer
           {dialog.kind === 'utxos' && <UtxoList t={t} service={service} />}
           {dialog.kind === 'legacy' && <LegacyMigrate t={t} service={service} state={state} />}
           {dialog.kind === 'settings' && <SettingsView t={t} service={service} settings={settings} />}
-          {dialog.kind === 'bridge' && (
-            <div className="stack">
-              <h2>{t('bridgeTitle')}</h2>
-              <p className="muted">{t('bridgeText')}</p>
-            </div>
-          )}
+          {dialog.kind === 'bridge' && <BridgeDialog t={t} service={service} state={state} />}
         </Modal>
       )}
     </div>
