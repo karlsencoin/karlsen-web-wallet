@@ -248,6 +248,10 @@ function WalletInfo({
   const [msg, setMsg] = useState<string>();
   const [err, setErr] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const [nodeVersion, setNodeVersion] = useState<string>();
+  useEffect(() => {
+    service.nodeVersion().then(setNodeVersion).catch(() => setNodeVersion(undefined));
+  }, [service, state.connected]);
 
   const run = async (fn: () => Promise<string | void>) => {
     setMsg(undefined);
@@ -320,6 +324,7 @@ function WalletInfo({
         <div className="small devinfo">
           <div>Karlsen Web Wallet: {APP_VERSION}</div>
           <div>Rusty Karlsen WASM SDK: {service.sdkVersion()}</div>
+          <div>{t('nodeVersion')}: {nodeVersion ?? '—'}</div>
           <div>{t('nodeUrl')}: {state.nodeUrl}</div>
           <div>{t('network')}: {settings.networkId}</div>
           <div>React: 18 · Vite: 5</div>

@@ -370,6 +370,12 @@ export class WalletService {
     };
   }
 
+  /** Version string reported by the connected karlsend node (e.g. "3.1.1"). */
+  async nodeVersion(): Promise<string> {
+    const r = await this.rpcClient.getServerInfo();
+    return String(r.serverVersion ?? '?');
+  }
+
   /** All UTXOs of the account, largest first. */
   async utxos(): Promise<{ address: string; txId: string; index: number; amount: bigint; daaScore: bigint; coinbase: boolean }[]> {
     const w = this.requireWallet();
