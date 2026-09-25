@@ -1,0 +1,9 @@
+{
+  "name": "Karlsen Web Wallet",
+  "short_name": "Karlsen Wallet",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f1419",
+  "theme_color": "#0f1419",
+  "icons": [{ "src": "/karlsen.svg", "sizes": "any", "type": "image/svg+xml" }]
+}
