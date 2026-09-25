@@ -1,6 +1,22 @@
 // User-adjustable runtime settings, persisted in localStorage (non-sensitive only).
 
-export type Lang = 'en' | 'tr';
+/** Supported UI languages, ordered by ISO 639-1 code, each shown by its native name. */
+export const LANGUAGES = [
+  { code: 'de', name: 'Deutsch' },
+  { code: 'en', name: 'English' },
+  { code: 'es', name: 'Español' },
+  { code: 'fr', name: 'Français' },
+  { code: 'id', name: 'Bahasa Indonesia' },
+  { code: 'ja', name: '日本語' },
+  { code: 'ko', name: '한국어' },
+  { code: 'pt', name: 'Português' },
+  { code: 'ru', name: 'Русский' },
+  { code: 'tr', name: 'Türkçe' },
+  { code: 'vi', name: 'Tiếng Việt' },
+  { code: 'zh', name: '中文' },
+] as const;
+
+export type Lang = (typeof LANGUAGES)[number]['code'];
 
 export interface Settings {
   /** wRPC Borsh endpoint of a karlsend node, e.g. ws://192.168.1.25:43110 */
@@ -27,7 +43,14 @@ function defaultNodeUrl(): string {
 }
 
 function defaultLang(): Lang {
-  return navigator.language?.toLowerCase().startsWith('tr') ? 'tr' : 'en';
+  // First browser language we support wins; English otherwise.
+  const preferred = navigator.languages?.length ? navigator.languages : [navigator.language];
+  for (const tag of preferred) {
+    const base = tag?.toLowerCase().split('-')[0];
+    const hit = LANGUAGES.find((l) => l.code === base);
+    if (hit) return hit.code;
+  }
+  return 'en';
 }
 
 export function loadSettings(): Settings {

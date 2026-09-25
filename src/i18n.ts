@@ -46,7 +46,8 @@ const en = {
   restoreText: 'Enter your 12 or 24 word BIP-39 seed phrase (Karlsen derivation path m/44\'/121337\').',
   invalidSeed: 'This is not a valid BIP-39 seed phrase.',
   legacyNote:
-    'Seed phrases from the old wallet.karlsencoin.org web wallet (derivation 972) produce different addresses and are not supported here. Send your funds from the old wallet to your new address instead.',
+    'Seed phrases from the old wallet.karlsencoin.org web wallet or Karlsen-Desktop (derivation 972) produce different addresses. After creating a wallet here, use the "Old wallet (972)" tab to move those funds.',
+  seedWords: 'words',
   setPassword: 'Choose a wallet password',
   passwordText: 'The password encrypts the wallet stored in this browser. It is required to unlock the wallet and to send funds.',
   password: 'Password',
@@ -125,9 +126,9 @@ const en = {
   error: 'Error',
 };
 
-type Dict = typeof en;
+export type Dict = typeof en;
 
-const tr: Dict = {
+const tr: Partial<Dict> = {
   tabLegacy: "Eski cüzdan (972)",
   legacyTitle: "Eski web cüzdanından fon taşı",
   legacyIntro: "Eski wallet.karlsencoin.org web cüzdanı ve Karlsen-Desktop standart dışı bir anahtar yolu (m/44'/972) kullanıyordu. O cüzdandaki fonları bulup bu cüzdandaki adresine taşımak için eski cüzdanın seed kelimelerini gir. Seed yalnızca bu tarayıcıda kullanılır ve kaydedilmez.",
@@ -173,7 +174,8 @@ const tr: Dict = {
   restoreText: '12 veya 24 kelimelik BIP-39 kurtarma ifadenizi girin (Karlsen türetme yolu m/44\'/121337\').',
   invalidSeed: 'Bu geçerli bir BIP-39 kurtarma ifadesi değil.',
   legacyNote:
-    'Eski wallet.karlsencoin.org web cüzdanının kelimeleri (972 türetme yolu) farklı adresler üretir ve burada desteklenmez. Bunun yerine fonlarınızı eski cüzdandan yeni adresinize gönderin.',
+    'Eski wallet.karlsencoin.org web cüzdanının veya Karlsen-Desktop\'un kelimeleri (972 türetme yolu) farklı adresler üretir. Burada cüzdan oluşturduktan sonra bu fonları "Eski cüzdan (972)" sekmesinden taşıyabilirsiniz.',
+  seedWords: 'kelime',
   setPassword: 'Cüzdan şifresi belirleyin',
   passwordText: 'Şifre, bu tarayıcıda saklanan cüzdanı şifreler. Cüzdanı açmak ve para göndermek için gereklidir.',
   password: 'Şifre',
@@ -189,7 +191,7 @@ const tr: Dict = {
   opening: 'Cüzdan açılıyor ve Karlsen node\'una bağlanılıyor…',
   forgetWallet: 'Bu cüzdanı bu tarayıcıdan kaldır',
   forgetConfirm:
-    'Bu işlem şifreli cüzdanı bu tarayıcıdan siler. Geri yüklemek için kurtarma ifadeniz gerekir. Onaylamak için SIL yazın.',
+    'Bu işlem şifreli cüzdanı bu tarayıcıdan siler. Geri yüklemek için kurtarma ifadeniz gerekir. Onaylamak için DELETE yazın.',
   tabWallet: 'Cüzdan',
   tabSend: 'Gönder',
   tabReceive: 'Al',
@@ -253,9 +255,16 @@ const tr: Dict = {
 };
 
 export type TKey = keyof Dict;
-const dicts: Record<Lang, Dict> = { en, tr };
+// Languages without a dictionary yet, or missing keys, fall back to English.
+// Extra dictionaries live in src/locales/<code>.ts (default export) and are picked up automatically.
+const dicts: Partial<Record<Lang, Partial<Dict>>> = { en, tr };
+const extra = import.meta.glob<{ default: Partial<Dict> }>('./locales/*.ts', { eager: true });
+for (const [path, mod] of Object.entries(extra)) {
+  const code = path.slice('./locales/'.length, -'.ts'.length) as Lang;
+  dicts[code] = mod.default;
+}
 
 export function translator(lang: Lang) {
-  const d = dicts[lang] ?? en;
-  return (k: TKey) => d[k];
+  const d = dicts[lang] ?? {};
+  return (k: TKey) => d[k] ?? en[k];
 }

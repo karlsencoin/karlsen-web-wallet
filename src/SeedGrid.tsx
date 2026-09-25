@@ -3,7 +3,16 @@
 // pasting exactly 12 or 24 words into the first box also switches the grid size.
 import { useRef } from 'react';
 
-export function SeedGrid({ words, onChange }: { words: string[]; onChange: (words: string[]) => void }) {
+export function SeedGrid({
+  words,
+  onChange,
+  plain = false,
+}: {
+  words: string[];
+  onChange: (words: string[]) => void;
+  /** Hide the word numbers (compact look used on the restore screen). */
+  plain?: boolean;
+}) {
   const refs = useRef<(HTMLInputElement | null)[]>([]);
 
   const update = (index: number, raw: string) => {
@@ -31,12 +40,10 @@ export function SeedGrid({ words, onChange }: { words: string[]; onChange: (word
   };
 
   return (
-    <div className="seed-grid">
+    <div className={plain ? "seed-grid seed-grid--plain" : "seed-grid"}>
       {words.map((word, i) => (
         <label key={i} className="seed-cell">
-          <span className="muted small">
-            {i + 1}.
-          </span>
+          {!plain && <span className="muted small">{i + 1}.</span>}
           <input
             ref={(el) => {
               refs.current[i] = el;

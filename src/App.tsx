@@ -3,6 +3,8 @@ import QRCode from 'qrcode';
 import { WalletService, txSummary, type WalletState, type SendEstimate } from './wallet';
 import { FEATURES, WALLET_FILENAME, loadSettings, saveSettings, type Settings } from './config';
 import { translator, type TKey } from './i18n';
+import { LANGUAGES } from './config';
+import { SeedGrid } from './SeedGrid';
 import { LegacyMigrate } from './LegacyMigrate';
 
 // Explorer base for transaction links (Karlsen explorer is a kaspa-explorer fork: /txs/<id>).
@@ -186,10 +188,12 @@ function SeedConfirm({ t, mnemonic, onBack, onOk }: { t: T; mnemonic: string; on
 }
 
 function RestoreForm({ t, service, onBack, onOk }: { t: T; service: WalletService; onBack: () => void; onOk: (m: string) => void }) {
-  const [phrase, setPhrase] = useState('');
+  const [words, setWords] = useState<string[]>(() => Array(12).fill(''));
   const [err, setErr] = useState(false);
+  const setSize = (n: number) => setWords((w) => Array.from({ length: n }, (_, i) => w[i] ?? ''));
   const submit = () => {
-    const ok = service.validateMnemonic(phrase);
+    const phrase = words.map((w) => w.trim()).join(' ');
+    const ok = words.every((w) => w.trim() !== '') && service.validateMnemonic(phrase);
     setErr(!ok);
     if (ok) onOk(phrase);
   };
@@ -197,12 +201,20 @@ function RestoreForm({ t, service, onBack, onOk }: { t: T; service: WalletServic
     <div className="card narrow">
       <h2>{t('restoreTitle')}</h2>
       <p>{t('restoreText')}</p>
-      <textarea
-        rows={4}
-        autoComplete="off"
-        spellCheck={false}
-        value={phrase}
-        onChange={(e) => setPhrase(e.target.value)}
+      <div className="row seed-size">
+        {[12, 24].map((n) => (
+          <button key={n} className={words.length === n ? 'primary' : ''} onClick={() => setSize(n)}>
+            {n} {t('seedWords')}
+          </button>
+        ))}
+      </div>
+      <SeedGrid
+        words={words}
+        onChange={(w) => {
+          setErr(false);
+          setWords(w);
+        }}
+        plain
       />
       {err && <p className="error">{t('invalidSeed')}</p>}
       <p className="muted small">{t('legacyNote')}</p>
@@ -260,7 +272,7 @@ function Unlock({ t, service, error, lang }: { t: T; service: WalletService; err
     }
   };
   const forget = () => {
-    const token = lang === 'tr' ? 'SIL' : 'DELETE';
+    const token = 'DELETE';
     if (prompt(t('forgetConfirm')) !== token) return;
     // The SDK stores the encrypted wallet file in localStorage under keys derived from the filename.
     Object.keys(localStorage)
@@ -534,8 +546,9 @@ function SettingsView({ t, service, settings }: { t: T; service: WalletService; 
       </label>
       <label>{t('language')}
         <select value={s.lang} onChange={(e) => setS({ ...s, lang: e.target.value as Settings['lang'] })}>
-          <option value="en">English</option>
-          <option value="tr">Türkçe</option>
+          {LANGUAGES.map((l) => (
+            <option key={l.code} value={l.code}>{l.name}</option>
+          ))}
         </select>
       </label>
       <button className="primary" onClick={() => { saveSettings(s); location.reload(); }}>{t('save')}</button>
