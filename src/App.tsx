@@ -1,21 +1,35 @@
 import { useEffect, useMemo, useState } from 'react';
-import QRCode from 'qrcode';
-import { WalletService, txSummary, type WalletState, type SendEstimate } from './wallet';
-import { FEATURES, WALLET_FILENAME, loadSettings, saveSettings, type Settings } from './config';
+import { WalletService, type WalletState } from './wallet';
+import { LANGUAGES, loadSettings, saveSettings, type Settings } from './config';
 import { translator, type TKey } from './i18n';
-import { LANGUAGES } from './config';
 import { SeedGrid } from './SeedGrid';
-import { LegacyMigrate } from './LegacyMigrate';
-
-// Explorer base for transaction links (Karlsen explorer is a kaspa-explorer fork: /txs/<id>).
-const EXPLORER_TX_URL = 'https://explorer.karlsencoin.org/txs/';
+import { Main } from './Classic';
 
 type T = (k: TKey) => string;
-type Tab = 'wallet' | 'send' | 'receive' | 'history' | 'bridge' | 'legacy' | 'settings';
+
+/** Applies the colour theme to <html>; 'auto' leaves it to prefers-color-scheme. */
+function applyTheme(theme: Settings['theme']) {
+  const root = document.documentElement;
+  if (theme === 'auto') delete root.dataset.theme;
+  else root.dataset.theme = theme;
+}
+
+function effectiveDark(theme: Settings['theme']): boolean {
+  if (theme === 'dark') return true;
+  if (theme === 'light') return false;
+  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false;
+}
 
 export default function App() {
-  const [settings] = useState<Settings>(loadSettings);
-  const service = useMemo(() => new WalletService(settings), [settings]);
+  const [settings, setSettings] = useState<Settings>(loadSettings);
+  // The wallet runtime is bound to the settings loaded at start; node/network changes reload the page.
+  const service = useMemo(() => new WalletService(settings), []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => applyTheme(settings.theme), [settings.theme]);
+  const update = (patch: Partial<Settings>) => {
+    const next = { ...settings, ...patch };
+    saveSettings(next);
+    setSettings(next);
+  };
   const [state, setState] = useState<WalletState>(service.state);
   const t = useMemo(() => translator(settings.lang), [settings.lang]);
 
@@ -42,7 +56,7 @@ export default function App() {
       body = <Onboarding t={t} service={service} error={state.error} />;
       break;
     case 'locked':
-      body = <Unlock t={t} service={service} error={state.error} lang={settings.lang} />;
+      body = <Unlock t={t} service={service} error={state.error} />;
       break;
     case 'opening':
       body = <Centered>{t('opening')}</Centered>;
@@ -55,9 +69,21 @@ export default function App() {
   return (
     <div className="app">
       <header className="topbar">
-        <img src="/karlsen.svg" alt="" width={28} height={28} />
-        <span className="brand">{t('appTitle')}</span>
-        {state.phase === 'ready' && <NodeStatus t={t} state={state} />}
+        <img src="/karlsen.svg" alt="" width={28} height={28} title={t('appTitle')} />
+        <div className="tools">
+          {state.phase === 'ready' && (
+            <button className="icon" title={t('lock')} onClick={() => void service.lock()}><LockIcon /></button>
+          )}
+          <label className="langsel" title={t('language')}>
+            <span aria-hidden="true">文A</span>
+            <select value={settings.lang} onChange={(e) => update({ lang: e.target.value as Settings['lang'] })}>
+              {LANGUAGES.map((l) => <option key={l.code} value={l.code}>{l.name}</option>)}
+            </select>
+          </label>
+          <button className="icon" title={t('themeToggle')} onClick={() => update({ theme: effectiveDark(settings.theme) ? 'light' : 'dark' })}>
+            {effectiveDark(settings.theme) ? '☀' : '☾'}
+          </button>
+        </div>
       </header>
       <main>{body}</main>
     </div>
@@ -66,18 +92,6 @@ export default function App() {
 
 function Centered({ children }: { children: React.ReactNode }) {
   return <div className="centered card">{children}</div>;
-}
-
-function NodeStatus({ t, state }: { t: T; state: WalletState }) {
-  const cls = state.connected ? (state.synced ? 'ok' : 'warn') : 'bad';
-  const label = state.connected
-    ? `${t('nodeConnected')} · ${state.synced ? t('nodeSynced') : t('nodeSyncing')}`
-    : t('nodeDisconnected');
-  return (
-    <span className={`status ${cls}`} title={state.nodeUrl}>
-      ● {label}
-    </span>
-  );
 }
 
 // ---------------------------------------------------------------- onboarding
@@ -259,7 +273,7 @@ function PasswordForm({ t, onBack, onSubmit }: { t: T; onBack: () => void; onSub
   );
 }
 
-function Unlock({ t, service, error, lang }: { t: T; service: WalletService; error?: string; lang: string }) {
+function Unlock({ t, service, error }: { t: T; service: WalletService; error?: string }) {
   const [pw, setPw] = useState('');
   const [busy, setBusy] = useState(false);
   const submit = async (e: React.FormEvent) => {
@@ -272,12 +286,8 @@ function Unlock({ t, service, error, lang }: { t: T; service: WalletService; err
     }
   };
   const forget = () => {
-    const token = 'DELETE';
-    if (prompt(t('forgetConfirm')) !== token) return;
-    // The SDK stores the encrypted wallet file in localStorage under keys derived from the filename.
-    Object.keys(localStorage)
-      .filter((k) => k.includes(WALLET_FILENAME))
-      .forEach((k) => localStorage.removeItem(k));
+    if (prompt(t('forgetConfirm')) !== 'DELETE') return;
+    service.forgetWallet();
     location.reload();
   };
   return (
@@ -291,299 +301,11 @@ function Unlock({ t, service, error, lang }: { t: T; service: WalletService; err
   );
 }
 
-// ---------------------------------------------------------------- main wallet
-
-function Main({ t, service, state, settings }: { t: T; service: WalletService; state: WalletState; settings: Settings }) {
-  const [tab, setTab] = useState<Tab>('wallet');
-  const tabs: [Tab, TKey][] = [
-    ['wallet', 'tabWallet'],
-    ['send', 'tabSend'],
-    ['receive', 'tabReceive'],
-    ['history', 'tabHistory'],
-    ...(FEATURES.bridge ? ([['bridge', 'tabBridge']] as [Tab, TKey][]) : []),
-    ['legacy', 'tabLegacy'],
-    ['settings', 'tabSettings'],
-  ];
+function LockIcon() {
   return (
-    <div className="main">
-      <nav className="tabs">
-        {tabs.map(([id, key]) => (
-          <button key={id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}>{t(key)}</button>
-        ))}
-        <button className="lock" onClick={() => void service.lock()}>{t('lock')}</button>
-      </nav>
-      {state.error && <p className="error">{state.error}</p>}
-      {tab === 'wallet' && <Overview t={t} service={service} state={state} />}
-      {tab === 'send' && <Send t={t} service={service} state={state} />}
-      {tab === 'receive' && <Receive t={t} service={service} state={state} />}
-      {tab === 'history' && <History t={t} service={service} state={state} />}
-      {tab === 'bridge' && <Bridge t={t} />}
-      {tab === 'legacy' && <LegacyMigrate t={t} service={service} state={state} />}
-      {tab === 'settings' && <SettingsView t={t} service={service} settings={settings} />}
-    </div>
-  );
-}
-
-function Amount({ service, sompi }: { service: WalletService; sompi?: bigint }) {
-  return <>{service.formatAmount(sompi)} KLS</>;
-}
-
-function Overview({ t, service, state }: { t: T; service: WalletService; state: WalletState }) {
-  const b = state.balance;
-  return (
-    <div className="card">
-      <div className="balance">
-        <div className="muted">{t('balanceAvailable')}</div>
-        <div className="big"><Amount service={service} sompi={b?.mature} /></div>
-      </div>
-      <div className="grid3">
-        <div><div className="muted">{t('balancePending')}</div><Amount service={service} sompi={b?.pending} /></div>
-        <div><div className="muted">{t('balanceOutgoing')}</div><Amount service={service} sompi={b?.outgoing} /></div>
-        <div><div className="muted">{t('utxoCount')}</div>{b ? b.matureUtxoCount + b.pendingUtxoCount : 0}</div>
-      </div>
-      <AddressBox t={t} address={state.receiveAddress} />
-    </div>
-  );
-}
-
-function AddressBox({ t, address }: { t: T; address?: string }) {
-  const [copied, setCopied] = useState(false);
-  if (!address) return null;
-  return (
-    <div className="address">
-      <div className="muted">{t('receiveAddress')}</div>
-      <code>{address}</code>
-      <button onClick={async () => { await navigator.clipboard.writeText(address); setCopied(true); setTimeout(() => setCopied(false), 1500); }}>
-        {copied ? t('copied') : t('copy')}
-      </button>
-    </div>
-  );
-}
-
-function Receive({ t, service, state }: { t: T; service: WalletService; state: WalletState }) {
-  const [qr, setQr] = useState<string>();
-  useEffect(() => {
-    if (state.receiveAddress) {
-      QRCode.toDataURL(state.receiveAddress, { margin: 1, width: 240 }).then(setQr).catch(() => setQr(undefined));
-    }
-  }, [state.receiveAddress]);
-  return (
-    <div className="card center">
-      {qr && <img className="qr" src={qr} alt="QR" width={240} height={240} />}
-      <AddressBox t={t} address={state.receiveAddress} />
-      <button onClick={() => void service.newReceiveAddress()}>{t('newAddress')}</button>
-    </div>
-  );
-}
-
-type FeeLevel = 'low' | 'normal' | 'priority';
-
-function Send({ t, service, state }: { t: T; service: WalletService; state: WalletState }) {
-  const [to, setTo] = useState('');
-  const [amount, setAmount] = useState('');
-  const [fee, setFee] = useState<FeeLevel>('normal');
-  const [rates, setRates] = useState<Record<FeeLevel, number>>();
-  const [est, setEst] = useState<SendEstimate>();
-  const [pw, setPw] = useState('');
-  const [err, setErr] = useState<string>();
-  const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<string[]>();
-
-  useEffect(() => {
-    void service.feeRates().then((r) => {
-      if (r) setRates({ low: r.low.feeRate, normal: r.normal.feeRate, priority: r.priority.feeRate });
-    });
-  }, [service]);
-
-  const parsed = () => {
-    if (!service.validateAddress(to)) throw new Error(t('invalidAddress'));
-    const sompi = service.parseAmount(amount);
-    if (!sompi || sompi <= 0n) throw new Error(t('invalidAmount'));
-    return sompi;
-  };
-
-  const review = async () => {
-    setErr(undefined);
-    setBusy(true);
-    try {
-      setEst(await service.estimate(to, parsed(), rates?.[fee]));
-    } catch (e) {
-      setErr(String((e as Error)?.message ?? e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const send = async () => {
-    setErr(undefined);
-    setBusy(true);
-    try {
-      setResult(await service.send(pw, to, parsed(), rates?.[fee]));
-      setPw('');
-      setEst(undefined);
-    } catch (e) {
-      setErr(String((e as Error)?.message ?? e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  if (result) {
-    return (
-      <div className="card">
-        <h2>{t('sent')}</h2>
-        {result.map((id) => (
-          <p key={id}>{t('txId')}: <a href={EXPLORER_TX_URL + id} target="_blank" rel="noreferrer noopener"><code>{id}</code></a></p>
-        ))}
-        <button className="primary" onClick={() => { setResult(undefined); setTo(''); setAmount(''); }}>{t('continue')}</button>
-      </div>
-    );
-  }
-
-  return (
-    <div className="card">
-      <h2>{t('sendTitle')}</h2>
-      <label>{t('recipient')}<input spellCheck={false} autoComplete="off" value={to} onChange={(e) => { setTo(e.target.value); setEst(undefined); }} /></label>
-      <label>{t('amount')}
-        <div className="row">
-          <input inputMode="decimal" value={amount} onChange={(e) => { setAmount(e.target.value); setEst(undefined); }} />
-          <button type="button" onClick={() => { setAmount(service.formatAmount(state.balance?.mature)); setEst(undefined); }}>{t('max')}</button>
-        </div>
-      </label>
-      <label>{t('feePriority')}
-        <select value={fee} onChange={(e) => { setFee(e.target.value as FeeLevel); setEst(undefined); }}>
-          <option value="low">{t('feeLow')}</option>
-          <option value="normal">{t('feeNormal')}</option>
-          <option value="priority">{t('feeHigh')}</option>
-        </select>
-      </label>
-      {!est && <button className="primary" disabled={busy || !to || !amount} onClick={review}>{t('review')}</button>}
-      {est && (
-        <div className="review">
-          <p>{t('networkFee')}: <b><Amount service={service} sompi={est.fees} /></b></p>
-          {est.finalAmount !== undefined && <p>{t('totalDeducted')}: <b><Amount service={service} sompi={est.finalAmount + est.fees} /></b></p>}
-          <p>{t('txCount')}: {est.transactions}</p>
-          <p className="muted small">{t('sendPasswordText')}</p>
-          <input type="password" autoComplete="current-password" placeholder={t('password')} value={pw} onChange={(e) => setPw(e.target.value)} />
-          <div className="row">
-            <button onClick={() => setEst(undefined)} disabled={busy}>{t('cancel')}</button>
-            <button className="primary" onClick={send} disabled={busy || !pw}>{t('confirmSend')}</button>
-          </div>
-        </div>
-      )}
-      {err && <p className="error">{err}</p>}
-    </div>
-  );
-}
-
-function History({ t, service, state }: { t: T; service: WalletService; state: WalletState }) {
-  return (
-    <div className="card">
-      <div className="row between">
-        <h2>{t('tabHistory')}</h2>
-        <button onClick={() => void service.refreshHistory()}>{t('refresh')}</button>
-      </div>
-      {state.transactions.length === 0 && <p className="muted">{t('historyEmpty')}</p>}
-      <ul className="history">
-        {state.transactions.map((tx) => {
-          const s = txSummary(tx);
-          const when = tx.unixtimeMsec ? new Date(Number(tx.unixtimeMsec)).toLocaleString() : `DAA ${tx.blockDaaScore}`;
-          const label = s.direction === 'in' ? t('incoming') : s.direction === 'out' ? t('outgoing') : t('internal');
-          return (
-            <li key={tx.id} className={s.direction}>
-              <div>
-                <b>{label}</b> <span className="muted small">{when}</span>
-                <div><a className="small" href={EXPLORER_TX_URL + tx.id} target="_blank" rel="noreferrer noopener" title={t('explorer')}><code>{tx.id}</code></a></div>
-              </div>
-              <div className="amt">{s.direction === 'out' ? '−' : s.direction === 'in' ? '+' : ''}<Amount service={service} sompi={s.value} /></div>
-            </li>
-          );
-        })}
-      </ul>
-    </div>
-  );
-}
-
-function Bridge({ t }: { t: T }) {
-  return (
-    <div className="card">
-      <h2>{t('bridgeTitle')}</h2>
-      <p className="muted">{t('bridgeText')}</p>
-    </div>
-  );
-}
-
-function SettingsView({ t, service, settings }: { t: T; service: WalletService; settings: Settings }) {
-  const [s, setS] = useState(settings);
-  const [oldPw, setOldPw] = useState('');
-  const [newPw, setNewPw] = useState('');
-  const [actionPw, setActionPw] = useState('');
-  const [msg, setMsg] = useState<string>();
-  const [err, setErr] = useState<string>();
-
-  const run = async (fn: () => Promise<string | void>) => {
-    setMsg(undefined);
-    setErr(undefined);
-    try {
-      const r = await fn();
-      if (r) setMsg(r);
-    } catch (e) {
-      setErr(String((e as Error)?.message ?? e));
-    }
-  };
-
-  return (
-    <div className="card">
-      <h2>{t('settingsTitle')}</h2>
-      <label>{t('nodeUrl')}<input spellCheck={false} value={s.nodeUrl} onChange={(e) => setS({ ...s, nodeUrl: e.target.value })} /></label>
-      <p className="muted small">{t('nodeUrlHelp')}</p>
-      <label>{t('network')}
-        <select value={s.networkId} onChange={(e) => setS({ ...s, networkId: e.target.value as Settings['networkId'] })}>
-          <option value="mainnet">mainnet</option>
-          <option value="testnet-10">testnet-10</option>
-          <option value="testnet-11">testnet-11</option>
-        </select>
-      </label>
-      <label>{t('language')}
-        <select value={s.lang} onChange={(e) => setS({ ...s, lang: e.target.value as Settings['lang'] })}>
-          {LANGUAGES.map((l) => (
-            <option key={l.code} value={l.code}>{l.name}</option>
-          ))}
-        </select>
-      </label>
-      <button className="primary" onClick={() => { saveSettings(s); location.reload(); }}>{t('save')}</button>
-
-      <hr />
-      <h3>{t('changePassword')}</h3>
-      <input type="password" autoComplete="current-password" placeholder={t('currentPassword')} value={oldPw} onChange={(e) => setOldPw(e.target.value)} />
-      <input type="password" autoComplete="new-password" placeholder={t('newPassword')} value={newPw} onChange={(e) => setNewPw(e.target.value)} />
-      <button
-        disabled={!oldPw || newPw.length < 8}
-        onClick={() => run(async () => { await service.changePassword(oldPw, newPw); setOldPw(''); setNewPw(''); return t('passwordChanged'); })}
-      >{t('changePassword')}</button>
-
-      <hr />
-      <input type="password" autoComplete="current-password" placeholder={t('password')} value={actionPw} onChange={(e) => setActionPw(e.target.value)} />
-      <h3>{t('compound')}</h3>
-      <p className="muted small">{t('compoundText')}</p>
-      <button disabled={!actionPw} onClick={() => run(async () => { const ids = await service.compound(actionPw); return `${t('txId')}: ${ids.join(', ')}`; })}>{t('compound')}</button>
-      <h3>{t('exportBackup')}</h3>
-      <p className="muted small">{t('exportText')}</p>
-      <button
-        disabled={!actionPw}
-        onClick={() => run(async () => {
-          const hex = await service.exportBackup(actionPw);
-          const blob = new Blob([hex], { type: 'text/plain' });
-          const a = document.createElement('a');
-          a.href = URL.createObjectURL(blob);
-          a.download = `karlsen-wallet-backup-${new Date().toISOString().slice(0, 10)}.kwb`;
-          a.click();
-          URL.revokeObjectURL(a.href);
-        })}
-      >{t('exportBackup')}</button>
-
-      {msg && <p className="ok">{msg}</p>}
-      {err && <p className="error">{err}</p>}
-    </div>
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+      <rect x="5" y="11" width="14" height="10" rx="2" />
+      <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+    </svg>
   );
 }

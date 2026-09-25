@@ -23,6 +23,8 @@ export interface Settings {
   nodeUrl: string;
   networkId: 'mainnet' | 'testnet-10' | 'testnet-11';
   lang: Lang;
+  /** Colour theme; 'auto' follows the operating system. */
+  theme: 'auto' | 'light' | 'dark';
 }
 
 /** Feature flags. The bridge tab stays hidden until the wKLS program and daemon are live. */
@@ -54,7 +56,7 @@ function defaultLang(): Lang {
 }
 
 export function loadSettings(): Settings {
-  const defaults: Settings = { nodeUrl: defaultNodeUrl(), networkId: 'mainnet', lang: defaultLang() };
+  const defaults: Settings = { nodeUrl: defaultNodeUrl(), networkId: 'mainnet', lang: defaultLang(), theme: 'auto' };
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
     return raw ? { ...defaults, ...JSON.parse(raw) } : defaults;
@@ -70,3 +72,9 @@ export function saveSettings(s: Settings): void {
     /* storage unavailable: settings stay in memory for this session */
   }
 }
+
+/** App version shown on the WALLET tab (kept in sync with package.json). */
+export const APP_VERSION = '0.2.0';
+
+/** Donation address shown on the WALLET tab (Karlsen development fund). */
+export const DONATION_ADDRESS = import.meta.env.VITE_DONATION_ADDRESS as string | undefined;

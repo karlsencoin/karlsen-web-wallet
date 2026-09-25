@@ -24,7 +24,21 @@ export interface WalletState {
   account?: IAccountDescriptor;
   receiveAddress?: string;
   balance?: IBalance;
+  /** Current history page (newest first). */
   transactions: ITransactionRecord[];
+  /** Total number of stored transaction records. */
+  txTotal: number;
+  /** Zero-based index of the history page held in `transactions`. */
+  txPage: number;
+}
+
+export interface DagInfo {
+  network: string;
+  virtualDaaScore: bigint;
+  headerCount: bigint;
+  blockCount: bigint;
+  difficulty: number;
+  pastMedianTime: bigint;
 }
 
 export interface SendEstimate {
@@ -36,7 +50,15 @@ export interface SendEstimate {
 
 type Listener = (s: WalletState) => void;
 
-const HISTORY_PAGE = 50n;
+/** Transactions per history page (same density as the old web wallet). */
+export const HISTORY_PAGE_SIZE = 10;
+
+/**
+ * localStorage key of the seed phrase, encrypted with the wallet password.
+ * The SDK cannot return the mnemonic (prvKeyDataGet is unimplemented in the WASM bindings),
+ * so the wallet keeps its own copy to support "Backup Seed".
+ */
+const SEED_KEY = 'kww.seed.v1';
 
 function errText(e: unknown): string {
   if (e instanceof Error) return e.message;
@@ -55,7 +77,7 @@ export class WalletService {
   private historyTimer?: number;
   /** Last balance per account id; balance events can arrive before the account is in state. */
   private balances = new Map<string, IBalance>();
-  state: WalletState = { phase: 'loading', connected: false, synced: false, transactions: [] };
+  state: WalletState = { phase: 'loading', connected: false, synced: false, transactions: [], txTotal: 0, txPage: 0 };
 
   constructor(private settings: Settings) {}
 
@@ -68,6 +90,14 @@ export class WalletService {
   private set(patch: Partial<WalletState>) {
     this.state = { ...this.state, ...patch };
     this.listeners.forEach((l) => l(this.state));
+  }
+
+  sdkVersion(): string {
+    try {
+      return this.sdk.version();
+    } catch {
+      return '?';
+    }
   }
 
   get sdkHandle(): Sdk {
@@ -126,6 +156,7 @@ export class WalletService {
         title: 'Karlsen Web Wallet',
         overwriteWalletStorage: true,
       });
+      this.storeSeed(walletSecret, phrase);
       await this.openAndStart(walletSecret, phrase);
     } catch (e) {
       this.set({ phase: 'no-wallet', error: errText(e) });
@@ -199,6 +230,8 @@ export class WalletService {
       account: undefined,
       balance: undefined,
       transactions: [],
+      txTotal: 0,
+      txPage: 0,
       receiveAddress: undefined,
       connected: false,
       synced: false,
@@ -281,7 +314,94 @@ export class WalletService {
   }
 
   async changePassword(oldWalletSecret: string, newWalletSecret: string): Promise<void> {
+    // Decrypt first so a wrong old password fails before anything is changed.
+    const seed = this.hasSeedBackup() ? this.revealSeed(oldWalletSecret) : undefined;
     await this.requireWallet().walletChangeSecret({ oldWalletSecret, newWalletSecret });
+    if (seed) this.storeSeed(newWalletSecret, seed);
+  }
+
+  // ------------------------------------------------------------ seed backup
+
+  private storeSeed(walletSecret: string, mnemonic: string): void {
+    try {
+      localStorage.setItem(SEED_KEY, this.sdk.encryptXChaCha20Poly1305(mnemonic, walletSecret));
+    } catch (e) {
+      console.warn('seed backup could not be stored', e);
+    }
+  }
+
+  hasSeedBackup(): boolean {
+    try {
+      return !!localStorage.getItem(SEED_KEY);
+    } catch {
+      return false;
+    }
+  }
+
+  /** Decrypts the stored seed phrase; throws on a wrong password (authenticated encryption). */
+  revealSeed(walletSecret: string): string {
+    const blob = localStorage.getItem(SEED_KEY);
+    if (!blob) throw new Error('No seed backup is stored for this wallet.');
+    try {
+      return this.sdk.decryptXChaCha20Poly1305(blob, walletSecret);
+    } catch {
+      throw new Error('Wrong password.');
+    }
+  }
+
+  /** Removes the wallet file and the seed backup from this browser. */
+  forgetWallet(): void {
+    Object.keys(localStorage)
+      .filter((k) => k.includes(WALLET_FILENAME) || k === SEED_KEY)
+      .forEach((k) => localStorage.removeItem(k));
+  }
+
+  // ------------------------------------------------------------ node / debug
+
+  async dagInfo(): Promise<DagInfo> {
+    const r = await this.rpcClient.getBlockDagInfo();
+    return {
+      network: r.network,
+      virtualDaaScore: BigInt(r.virtualDaaScore),
+      headerCount: BigInt(r.headerCount),
+      blockCount: BigInt(r.blockCount),
+      difficulty: Number(r.difficulty),
+      pastMedianTime: BigInt(r.pastMedianTime),
+    };
+  }
+
+  /** All UTXOs of the account, largest first. */
+  async utxos(): Promise<{ address: string; txId: string; index: number; amount: bigint; daaScore: bigint; coinbase: boolean }[]> {
+    const w = this.requireWallet();
+    const { utxos } = await w.accountsGetUtxos({ accountId: this.requireAccount().accountId, addresses: [] });
+    return (utxos as any[])
+      .map((u) => {
+        const e = typeof u.toJSON === 'function' ? u.toJSON() : u;
+        return {
+          address: String(e.address ?? ''),
+          txId: String(e.outpoint?.transactionId ?? ''),
+          index: Number(e.outpoint?.index ?? 0),
+          amount: BigInt(e.amount ?? 0),
+          daaScore: BigInt(e.blockDaaScore ?? 0),
+          coinbase: !!e.isCoinbase,
+        };
+      })
+      .sort((a, b) => (a.amount === b.amount ? 0 : a.amount > b.amount ? -1 : 1));
+  }
+
+  /** Re-scans the account addresses (the SDK extends the scan window as it finds used addresses). */
+  async rescan(): Promise<void> {
+    await this.activateCurrentAccount();
+    this.scheduleHistoryRefresh();
+  }
+
+  /** Converts a script public key to a Karlsen address string (empty on failure). */
+  addressFromScript(spk: unknown): string {
+    try {
+      return this.sdk.addressFromScriptPublicKey(spk as any, this.settings.networkId)?.toString() ?? '';
+    } catch {
+      return '';
+    }
   }
 
   /** Encrypted wallet backup (hex). Can be restored with walletImport. */
@@ -293,24 +413,47 @@ export class WalletService {
     return walletData;
   }
 
-  async refreshHistory(): Promise<void> {
+  /** Reloads the current history page. */
+  refreshHistory(): Promise<void> {
+    return this.loadHistoryPage(this.state.txPage);
+  }
+
+  /** Loads one history page; records come newest first from the SDK store. */
+  async loadHistoryPage(page: number): Promise<void> {
     const w = this.wallet;
     const account = this.state.account;
     if (!w || !account) return;
     try {
+      const start = BigInt(Math.max(0, page) * HISTORY_PAGE_SIZE);
       const res = await w.transactionsDataGet({
         accountId: account.accountId,
         networkId: this.settings.networkId,
-        start: 0n,
-        end: HISTORY_PAGE,
+        start,
+        end: start + BigInt(HISTORY_PAGE_SIZE),
       });
-      const txs = [...res.transactions].sort((a, b) =>
-        a.blockDaaScore === b.blockDaaScore ? 0 : a.blockDaaScore > b.blockDaaScore ? -1 : 1,
-      );
-      this.set({ transactions: txs });
+      this.set({ transactions: sortNewestFirst(res.transactions), txTotal: Number(res.total), txPage: page });
     } catch {
-      /* history is non-critical; keep the previous list */
+      /* history is non-critical; keep the previous page */
     }
+  }
+
+  /** Every stored transaction record, newest first (used by the CSV export). */
+  async allTransactions(): Promise<ITransactionRecord[]> {
+    const w = this.requireWallet();
+    const account = this.requireAccount();
+    const out: ITransactionRecord[] = [];
+    const chunk = 500n;
+    for (let start = 0n; ; start += chunk) {
+      const res = await w.transactionsDataGet({
+        accountId: account.accountId,
+        networkId: this.settings.networkId,
+        start,
+        end: start + chunk,
+      });
+      out.push(...res.transactions);
+      if (res.transactions.length === 0 || start + chunk >= BigInt(res.total)) break;
+    }
+    return sortNewestFirst(out);
   }
 
   private scheduleHistoryRefresh() {
@@ -382,4 +525,13 @@ export function txSummary(tx: ITransactionRecord): { direction: 'in' | 'out' | '
     return { direction: 'out', value: (d?.paymentValue ?? tx.value) as bigint };
   }
   return { direction: 'self', value: (d?.changeValue ?? d?.paymentValue ?? tx.value ?? 0n) as bigint };
+}
+
+function sortNewestFirst(txs: ITransactionRecord[]): ITransactionRecord[] {
+  const key = (t: ITransactionRecord) => (t.unixtimeMsec != null ? BigInt(t.unixtimeMsec) : 0n) || BigInt(t.blockDaaScore ?? 0);
+  return [...txs].sort((a, b) => {
+    const ka = key(a);
+    const kb = key(b);
+    return ka === kb ? 0 : ka > kb ? -1 : 1;
+  });
 }
