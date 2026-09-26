@@ -259,9 +259,29 @@ export class WalletService {
   }
 
   parseAmount(kls: string): bigint | undefined {
-    const v = kls.trim().replace(',', '.');
+    let v = kls.trim().replace(/[\s_]/g, '');
+    // "26,563.60" -> grouping commas; "12,5" (no dot, single comma) -> decimal comma
+    if (v.includes('.')) v = v.replace(/,/g, '');
+    else if ((v.match(/,/g) ?? []).length === 1) v = v.replace(',', '.');
+    else v = v.replace(/,/g, '');
     if (!/^\d+(\.\d{1,8})?$/.test(v)) return undefined;
-    return this.sdk.karlsenToSompi(v);
+    // Pure bigint conversion, no floats
+    const [whole, frac = ''] = v.split('.');
+    return BigInt(whole) * 100_000_000n + BigInt(frac.padEnd(8, '0'));
+  }
+
+  /** Machine format for input fields: no grouping separators, trailing zeros trimmed. */
+  formatAmountRaw(sompi: bigint | number | string | undefined): string {
+    const s = BigInt(sompi ?? 0); // balance may arrive as number/string from the SDK
+    const frac = (s % 100_000_000n).toString().padStart(8, '0').replace(/0+$/, '');
+    return frac ? `${s / 100_000_000n}.${frac}` : `${s / 100_000_000n}`;
+  }
+
+  /** Fee setting: receiverPays deducts the network fee from the sent amount (send-all). */
+  private feeSetting(receiverPays: boolean) {
+    return receiverPays
+      ? { amount: 0n, source: (this.sdk as any).FeeSource.ReceiverPays }
+      : 0n;
   }
 
   formatAmount(sompi: bigint | undefined): string {
@@ -276,25 +296,25 @@ export class WalletService {
     }
   }
 
-  async estimate(address: string, amount: bigint, feeRate?: number): Promise<SendEstimate> {
+  async estimate(address: string, amount: bigint, feeRate?: number, receiverPays = false): Promise<SendEstimate> {
     const w = this.requireWallet();
     const { generatorSummary: s } = await w.accountsEstimate({
       accountId: this.requireAccount().accountId,
       destination: [{ address: address.trim(), amount }],
-      priorityFeeSompi: 0n,
+      priorityFeeSompi: this.feeSetting(receiverPays) as any,
       ...(feeRate ? { feeRate } : {}),
     });
     return { fees: s.fees, finalAmount: s.finalAmount, transactions: s.transactions, utxos: s.utxos };
   }
 
   /** Sends KLS. The password is required again for every payment. */
-  async send(walletSecret: string, address: string, amount: bigint, feeRate?: number): Promise<string[]> {
+  async send(walletSecret: string, address: string, amount: bigint, feeRate?: number, receiverPays = false): Promise<string[]> {
     const w = this.requireWallet();
     const res = await w.accountsSend({
       walletSecret,
       accountId: this.requireAccount().accountId,
       destination: [{ address: address.trim(), amount }],
-      priorityFeeSompi: 0n,
+      priorityFeeSompi: this.feeSetting(receiverPays) as any,
       ...(feeRate ? { feeRate } : {}),
     });
     this.scheduleHistoryRefresh();

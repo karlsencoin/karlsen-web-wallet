@@ -630,6 +630,7 @@ function Send({
 }) {
   const [to, setTo] = useState(initialTo ?? '');
   const [amount, setAmount] = useState(initialAmount ?? '');
+  const [sendAll, setSendAll] = useState(false); // set by Max: fee is deducted from amount
   const [fee, setFee] = useState<FeeLevel>('normal');
   const [rates, setRates] = useState<Record<FeeLevel, number>>();
   const [est, setEst] = useState<Awaited<ReturnType<WalletService['estimate']>>>();
@@ -678,8 +679,8 @@ function Send({
       <label>{t('recipient')}<input spellCheck={false} autoComplete="off" value={to} onChange={(e) => { setTo(e.target.value); setEst(undefined); }} /></label>
       <label>{t('amount')}
         <div className="row">
-          <input inputMode="decimal" value={amount} onChange={(e) => { setAmount(e.target.value); setEst(undefined); }} />
-          <button type="button" className="fit" onClick={() => { setAmount(service.formatAmount(state.balance?.mature)); setEst(undefined); }}>{t('max')}</button>
+          <input inputMode="decimal" value={amount} onChange={(e) => { setAmount(e.target.value); setSendAll(false); setEst(undefined); }} />
+          <button type="button" className="fit" onClick={() => { setAmount(service.formatAmountRaw(state.balance?.mature)); setSendAll(true); setEst(undefined); }}>{t('max')}</button>
         </div>
       </label>
       <label>{t('feePriority')}
@@ -690,21 +691,23 @@ function Send({
         </select>
       </label>
       {!est && (
-        <button className="dark" disabled={busy || !to || !amount} onClick={() => wrap(async () => setEst(await service.estimate(to, parsed(), rates?.[fee])))}>
+        <button className="dark" disabled={busy || !to || !amount} onClick={() => wrap(async () => setEst(await service.estimate(to, parsed(), rates?.[fee], sendAll)))}>
           {t('review')}
         </button>
       )}
       {est && (
         <div className="review">
           <p>{t('networkFee')}: <b>{service.formatAmount(est.fees)} KLS</b></p>
-          {est.finalAmount !== undefined && <p>{t('totalDeducted')}: <b>{service.formatAmount(est.finalAmount + est.fees)} KLS</b></p>}
+          {/* send-all (receiver pays): finalAmount already includes the fee */}
+          {est.finalAmount !== undefined && <p>{t('recipientReceives')}: <b>{service.formatAmount(sendAll ? est.finalAmount - est.fees : est.finalAmount)} KLS</b></p>}
+          {est.finalAmount !== undefined && <p>{t('totalDeducted')}: <b>{service.formatAmount(sendAll ? est.finalAmount : est.finalAmount + est.fees)} KLS</b></p>}
           <p>{t('txCount')}: {est.transactions}</p>
           <p className="muted small">{t('sendPasswordText')}</p>
           <input type="password" autoComplete="current-password" placeholder={t('password')} value={pw} onChange={(e) => setPw(e.target.value)} />
           <div className="row">
             <button onClick={() => setEst(undefined)} disabled={busy}>{t('cancel')}</button>
             <button className="dark" disabled={busy || !pw}
-              onClick={() => wrap(async () => { setResult(await service.send(pw, to, parsed(), rates?.[fee])); setPw(''); setEst(undefined); })}>
+              onClick={() => wrap(async () => { setResult(await service.send(pw, to, parsed(), rates?.[fee], sendAll)); setPw(''); setEst(undefined); })}>
               {t('confirmSend')}
             </button>
           </div>
