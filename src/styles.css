@@ -201,3 +201,10 @@ details summary { cursor: pointer; text-transform: uppercase; font-size: 13px; l
 .bridge-kv .txid, .bridge-item .txid { word-break: break-all; font-family: ui-monospace, monospace; }
 .bridge-item { padding: 8px 0; border-top: 1px solid var(--line); word-break: break-word; }
 .bridge .row { display: flex; gap: 8px; }
+
+/* Notice pointing users of the previous web wallet to /legacy */
+.legacy-banner { border: 1px solid var(--warn); border-radius: 8px; padding: 12px 14px; margin: 0 0 16px; display: flex; flex-direction: column; gap: 10px; }
+.legacy-banner p { margin: 0; }
+a.button { display: inline-block; text-align: center; text-decoration: none; padding: 10px 14px; border-radius: 6px; }
+a.button.dark { background: var(--btn); color: var(--btn-ink); }
+a.button.dark:hover { background: var(--btn-hover); }

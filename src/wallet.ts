@@ -3,7 +3,7 @@
 //   walletCreate -> walletOpen -> accountsEnsureDefault -> connect -> start
 //   -> accountsEnumerate -> accountsActivate -> events (balance, pending, maturity, ...)
 import { loadSdk, type Sdk } from './sdk';
-import { WALLET_FILENAME, type Settings } from './config';
+import { WALLET_FILENAME, nodeCandidates, type Settings } from './config';
 import type {
   Wallet,
   IAccountDescriptor,
@@ -28,6 +28,8 @@ export interface WalletState {
   transactions: ITransactionRecord[];
   /** Total number of stored transaction records. */
   txTotal: number;
+  /** Set when unlocking failed because no node answered; the unlock screen offers a way out. */
+  nodeError?: { tried: string[] };
   /** Zero-based index of the history page held in `transactions`. */
   txPage: number;
 }
@@ -49,6 +51,17 @@ export interface SendEstimate {
 }
 
 type Listener = (s: WalletState) => void;
+
+/** How long one node gets to answer before the next candidate is tried. */
+const NODE_CONNECT_TIMEOUT_MS = 15_000;
+
+/** Thrown when none of the candidate nodes could be reached. */
+export class NodeUnreachableError extends Error {
+  constructor(public tried: string[], cause?: unknown) {
+    super(`No Karlsen node reachable (${tried.join(', ')})${cause ? `: ${errText(cause)}` : ''}`);
+    this.name = 'NodeUnreachableError';
+  }
+}
 
 /** Transactions per history page (same density as the old web wallet). */
 export const HISTORY_PAGE_SIZE = 10;
@@ -148,7 +161,7 @@ export class WalletService {
   async createFromMnemonic(walletSecret: string, mnemonic: string): Promise<void> {
     const w = this.requireWallet();
     const phrase = mnemonic.trim().toLowerCase().replace(/\s+/g, ' ');
-    this.set({ phase: 'opening', error: undefined });
+    this.set({ phase: 'opening', error: undefined, nodeError: undefined });
     try {
       await w.walletCreate({
         walletSecret,
@@ -159,6 +172,8 @@ export class WalletService {
       this.storeSeed(walletSecret, phrase);
       await this.openAndStart(walletSecret, phrase);
     } catch (e) {
+      // The wallet file already exists at this point, so a node failure lands on the unlock screen.
+      if (e instanceof NodeUnreachableError) return this.failNode(e);
       this.set({ phase: 'no-wallet', error: errText(e) });
       throw e;
     }
@@ -166,13 +181,56 @@ export class WalletService {
 
   /** Unlock the existing wallet file with the user's password. */
   async unlock(walletSecret: string): Promise<void> {
-    this.set({ phase: 'opening', error: undefined });
+    this.set({ phase: 'opening', error: undefined, nodeError: undefined });
     try {
       await this.openAndStart(walletSecret);
     } catch (e) {
+      if (e instanceof NodeUnreachableError) return this.failNode(e);
       this.set({ phase: 'locked', error: errText(e) });
       throw e;
     }
+  }
+
+  /** Closes the half-opened wallet and returns to the unlock screen with the node error. */
+  private async failNode(e: NodeUnreachableError): Promise<void> {
+    try {
+      await this.wallet?.walletClose({});
+    } catch {
+      /* best effort */
+    }
+    this.set({ phase: 'locked', error: e.message, nodeError: { tried: e.tried } });
+  }
+
+  /**
+   * Connects to the first candidate node that answers within the timeout.
+   * The SDK's own retry loop would otherwise keep a dead URL spinning forever.
+   */
+  private async connectAny(w: Wallet): Promise<string> {
+    const tried: string[] = [];
+    let last: unknown;
+    for (const url of nodeCandidates(this.settings)) {
+      tried.push(url);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          w.connect({ url, blockAsyncConnect: true, retryInterval: 3000 }),
+          new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error(`timeout after ${NODE_CONNECT_TIMEOUT_MS / 1000}s`)), NODE_CONNECT_TIMEOUT_MS);
+          }),
+        ]);
+        return url;
+      } catch (e) {
+        last = e;
+        try {
+          await w.disconnect(); // stop the background reconnect loop before trying the next node
+        } catch {
+          /* ignore */
+        }
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+    throw new NodeUnreachableError(tried, last);
   }
 
   private async openAndStart(walletSecret: string, mnemonic?: string): Promise<void> {
@@ -185,8 +243,8 @@ export class WalletService {
       type: new sdk.AccountKind('bip32'),
       ...(mnemonic ? { mnemonic } : {}),
     });
-    await w.connect({ url: this.settings.nodeUrl, blockAsyncConnect: true, retryInterval: 3000 });
-    this.set({ connected: true, synced: !!w.isSynced });
+    const nodeUrl = await this.connectAny(w);
+    this.set({ connected: true, synced: !!w.isSynced, nodeError: undefined });
     await w.start();
     const { accountDescriptors } = await w.accountsEnumerate({});
     const account = accountDescriptors[0];
@@ -196,7 +254,7 @@ export class WalletService {
       phase: 'ready',
       account,
       receiveAddress: account.receiveAddress?.toString(),
-      nodeUrl: this.settings.nodeUrl,
+      nodeUrl,
     });
     // Activate only after connect() and start() have completed, otherwise the account is never scanned.
     await this.activateCurrentAccount();

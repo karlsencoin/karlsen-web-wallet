@@ -19,7 +19,12 @@ export const LANGUAGES = [
 export type Lang = (typeof LANGUAGES)[number]['code'];
 
 export interface Settings {
-  /** wRPC Borsh endpoint of a karlsend node, e.g. ws://192.168.1.25:43110 */
+  /**
+   * 'public': connect to the Karlsen public node(s) shipped with this build (default).
+   * 'custom': connect to the user's own node given in `nodeUrl`.
+   */
+  nodeMode: 'public' | 'custom';
+  /** wRPC Borsh endpoint of the user's own karlsend node (used only when nodeMode is 'custom'). */
   nodeUrl: string;
   networkId: 'mainnet' | 'testnet-10' | 'testnet-11';
   lang: Lang;
@@ -43,11 +48,43 @@ export const WALLET_FILENAME = 'karlsen-web-wallet';
 
 const SETTINGS_KEY = 'kww.settings';
 
-function defaultNodeUrl(): string {
-  const fromEnv = import.meta.env.VITE_DEFAULT_NODE_URL as string | undefined;
-  if (fromEnv) return fromEnv;
-  // Same-host default is convenient when karlsend runs next to the dev server.
-  return `ws://${location.hostname || '127.0.0.1'}:43110`;
+/**
+ * Public node endpoints, tried in order until one answers (simple failover).
+ * Build-time override: VITE_PUBLIC_NODE_URLS="wss://a/wrpc,wss://b/wrpc".
+ * Default on https: the same origin's /wrpc path, proxied by nginx to karlsend, so
+ * wallet.karlsencoin.org and any later domain each use their own endpoint.
+ * Default on plain http (LAN preview): karlsend on the same host, port 43110.
+ */
+export function publicNodeUrls(): string[] {
+  const fromEnv = (import.meta.env.VITE_PUBLIC_NODE_URLS as string | undefined) ?? '';
+  const list = fromEnv.split(',').map((u) => u.trim()).filter(Boolean);
+  if (list.length) return list;
+  if (location.protocol === 'https:') return [`wss://${location.host}/wrpc`];
+  return [`ws://${location.hostname || '127.0.0.1'}:43110`];
+}
+
+/** Endpoints the wallet should try for the given settings, in order. */
+export function nodeCandidates(s: Settings): string[] {
+  return s.nodeMode === 'custom' && s.nodeUrl ? [s.nodeUrl] : publicNodeUrls();
+}
+
+/**
+ * Validates a custom node URL. Returns an i18n key describing the problem, or undefined if valid.
+ * A page served over https may only open wss:// sockets (browsers block ws:// as mixed content),
+ * except to localhost.
+ */
+export function validateNodeUrl(raw: string): 'nodeUrlInvalid' | 'nodeUrlNeedsWss' | undefined {
+  let u: URL;
+  try {
+    u = new URL(raw.trim());
+  } catch {
+    return 'nodeUrlInvalid';
+  }
+  if (u.protocol !== 'ws:' && u.protocol !== 'wss:') return 'nodeUrlInvalid';
+  if (!u.hostname) return 'nodeUrlInvalid';
+  const local = u.hostname === 'localhost' || u.hostname === '127.0.0.1' || u.hostname === '[::1]';
+  if (location.protocol === 'https:' && u.protocol === 'ws:' && !local) return 'nodeUrlNeedsWss';
+  return undefined;
 }
 
 function defaultLang(): Lang {
@@ -62,10 +99,15 @@ function defaultLang(): Lang {
 }
 
 export function loadSettings(): Settings {
-  const defaults: Settings = { nodeUrl: defaultNodeUrl(), networkId: 'mainnet', lang: defaultLang(), theme: 'auto' };
+  const defaults: Settings = { nodeMode: 'public', nodeUrl: '', networkId: 'mainnet', lang: defaultLang(), theme: 'auto' };
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
-    return raw ? { ...defaults, ...JSON.parse(raw) } : defaults;
+    if (!raw) return defaults;
+    const stored = JSON.parse(raw) as Partial<Settings>;
+    // Settings saved before nodeMode existed always carried a node URL; start them on the
+    // public node so a stale LAN address cannot lock the wallet on "connecting…".
+    if (!stored.nodeMode) stored.nodeMode = 'public';
+    return { ...defaults, ...stored };
   } catch {
     return defaults;
   }
@@ -79,8 +121,24 @@ export function saveSettings(s: Settings): void {
   }
 }
 
+/**
+ * Where the previous web wallet (m/44'/972, pwa.js) is served, unchanged, on the same origin.
+ * Same origin matters: its encrypted wallet stays in this browser's storage and opens with the old password.
+ */
+export const LEGACY_WALLET_URL = (import.meta.env.VITE_LEGACY_WALLET_URL as string | undefined) ?? '/legacy';
+
+/** True when this browser still holds a wallet created by the previous web wallet. */
+export function hasLegacyWallet(): boolean {
+  try {
+    // Old wallet keys: "karlsen-wallet" and "karlsen-wallet-<timestamp>" (this wallet uses "karlsen-web-wallet.*").
+    return Object.keys(localStorage).some((k) => k === 'karlsen-wallet' || /^karlsen-wallet-\d+$/.test(k));
+  } catch {
+    return false;
+  }
+}
+
 /** App version shown on the WALLET tab (kept in sync with package.json). */
-export const APP_VERSION = '0.2.0';
+export const APP_VERSION = '2.0.0';
 
 /** Donation address shown on the WALLET tab (Karlsen development fund). */
 export const DONATION_ADDRESS = import.meta.env.VITE_DONATION_ADDRESS as string | undefined;

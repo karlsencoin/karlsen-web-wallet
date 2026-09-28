@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from 'react';
 import QRCode from 'qrcode';
 import type { ITransactionRecord } from './karlsen-sdk';
 import { HISTORY_PAGE_SIZE, txSummary, type DagInfo, type WalletService, type WalletState } from './wallet';
-import { APP_VERSION, DONATION_ADDRESS, FEATURES, LANGUAGES, saveSettings, type Settings } from './config';
+import { APP_VERSION, DONATION_ADDRESS, FEATURES, LANGUAGES, LEGACY_WALLET_URL, publicNodeUrls, saveSettings, validateNodeUrl, type Settings } from './config';
 import type { TKey } from './i18n';
 import { LegacyMigrate } from './LegacyMigrate';
 import { BridgeDialog } from './Bridge';
@@ -77,7 +77,9 @@ export function Main({ t, service, state, settings }: { t: T; service: WalletSer
           {dialog.kind === 'utxos' && <UtxoList t={t} service={service} />}
           {dialog.kind === 'legacy' && <LegacyMigrate t={t} service={service} state={state} />}
           {dialog.kind === 'settings' && <SettingsView t={t} service={service} settings={settings} />}
-          {dialog.kind === 'bridge' && <BridgeDialog t={t} service={service} state={state} />}
+          {dialog.kind === 'bridge' && (FEATURES.bridge
+            ? <BridgeDialog t={t} service={service} state={state} />
+            : <BridgeComingSoon t={t} />)}
         </Modal>
       )}
     </div>
@@ -299,8 +301,10 @@ function WalletInfo({
         <button className="dark" onClick={recover}>{t('recoverFromSeed')}</button>
         <button className="dark" onClick={() => open({ kind: 'export' })}>{t('exportWalletFile')}</button>
         <button className="dark" onClick={() => open({ kind: 'legacy' })}>{t('tabLegacy')}</button>
-        {FEATURES.bridge && <button className="dark" onClick={() => open({ kind: 'bridge' })}>{t('tabBridge')}</button>}
+        {/* Always visible: before launch the dialog is a read-only teaser that makes no API calls. */}
+        <button className="dark" onClick={() => open({ kind: 'bridge' })}>{t('tabBridge')}</button>
         <button className="dark" onClick={() => open({ kind: 'settings' })}>{t('openSettings')}</button>
+        <a className="small" href={LEGACY_WALLET_URL}>{t('legacyLink')}</a>
       </div>
       {msg && <p className="ok center">{msg}</p>}
       {err && <p className="error center">{err}</p>}
@@ -726,12 +730,35 @@ function SettingsView({ t, service, settings }: { t: T; service: WalletService; 
   const [newPw, setNewPw] = useState('');
   const [msg, setMsg] = useState<string>();
   const [err, setErr] = useState<string>();
+  const nodeProblem = s.nodeMode === 'custom' ? validateNodeUrl(s.nodeUrl) : undefined;
+  const [advanced, setAdvanced] = useState(settings.nodeMode === 'custom');
 
   return (
     <div className="stack">
       <h2>{t('settingsTitle')}</h2>
-      <label>{t('nodeUrl')}<input spellCheck={false} value={s.nodeUrl} onChange={(e) => setS({ ...s, nodeUrl: e.target.value })} /></label>
-      <p className="muted small">{t('nodeUrlHelp')}</p>
+      <p className="muted small">
+        {t('nodeConnection')}: {s.nodeMode === 'custom' ? t('nodeModeCustom') : t('nodeModePublic')}
+      </p>
+      <details open={advanced} onToggle={(e) => setAdvanced((e.target as HTMLDetailsElement).open)}>
+        <summary>{t('nodeAdvanced')}</summary>
+        <div className="stack">
+          <label className="row">
+            <input type="radio" name="nodeMode" checked={s.nodeMode === 'public'} onChange={() => setS({ ...s, nodeMode: 'public' })} />
+            <span>{t('nodeModePublic')} <span className="muted small">({publicNodeUrls().join(', ')})</span></span>
+          </label>
+          <label className="row">
+            <input type="radio" name="nodeMode" checked={s.nodeMode === 'custom'} onChange={() => setS({ ...s, nodeMode: 'custom' })} />
+            <span>{t('nodeModeCustom')}</span>
+          </label>
+          {s.nodeMode === 'custom' && (
+            <>
+              <label>{t('nodeUrl')}<input spellCheck={false} placeholder="wss://your-node.example/wrpc" value={s.nodeUrl} onChange={(e) => setS({ ...s, nodeUrl: e.target.value })} /></label>
+              <p className="muted small">{t('nodeUrlHelp')}</p>
+              {nodeProblem && <p className="error">{t(nodeProblem)}</p>}
+            </>
+          )}
+        </div>
+      </details>
       <label>{t('network')}
         <select value={s.networkId} onChange={(e) => setS({ ...s, networkId: e.target.value as Settings['networkId'] })}>
           <option value="mainnet">mainnet</option>
@@ -744,7 +771,7 @@ function SettingsView({ t, service, settings }: { t: T; service: WalletService; 
           {LANGUAGES.map((l) => <option key={l.code} value={l.code}>{l.name}</option>)}
         </select>
       </label>
-      <button className="dark" onClick={() => { saveSettings(s); location.reload(); }}>{t('save')}</button>
+      <button className="dark" disabled={!!nodeProblem} onClick={() => { saveSettings(s); location.reload(); }}>{t('save')}</button>
 
       <hr />
       <h3>{t('changePassword')}</h3>
@@ -768,6 +795,18 @@ function SettingsView({ t, service, settings }: { t: T; service: WalletService; 
       >{t('changePassword')}</button>
       {msg && <p className="ok">{msg}</p>}
       {err && <p className="error">{err}</p>}
+    </div>
+  );
+}
+
+/** Pre-launch bridge teaser: explains the bridge, offers no inputs and never contacts the bridge API. */
+function BridgeComingSoon({ t }: { t: T }) {
+  return (
+    <div className="stack">
+      <h2>{t('bridgeTitle')}</h2>
+      <p>{t('bridgeIntro')}</p>
+      <p className="warning">{t('bridgeText')}</p>
+      <p className="muted small">KLS → wKLS · wKLS → KLS</p>
     </div>
   );
 }

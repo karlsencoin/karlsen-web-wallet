@@ -1,8 +1,10 @@
 node_modules
 dist
 *.log
+.env
 .env.local
-.env
 *.tsbuildinfo
-.env
-*.tsbuildinfo
+# Built from rusty-karlsen (see README), not committed
+public/karlsen-wasm/
+# One-off migration helper for the old wallet translations
+import-old-i18n.mjs

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { WalletService, type WalletState } from './wallet';
-import { LANGUAGES, loadSettings, saveSettings, type Settings } from './config';
+import { LANGUAGES, LEGACY_WALLET_URL, hasLegacyWallet, loadSettings, saveSettings, type Settings } from './config';
 import { translator, type TKey } from './i18n';
 import { SeedGrid } from './SeedGrid';
 import { Main } from './Classic';
@@ -56,7 +56,7 @@ export default function App() {
       body = <Onboarding t={t} service={service} error={state.error} />;
       break;
     case 'locked':
-      body = <Unlock t={t} service={service} error={state.error} />;
+      body = <Unlock t={t} service={service} error={state.error} nodeError={state.nodeError} settings={settings} />;
       break;
     case 'opening':
       body = <Centered>{t('opening')}</Centered>;
@@ -90,6 +90,22 @@ export default function App() {
   );
 }
 
+/** Prominent notice when the previous web wallet is still stored in this browser. */
+function LegacyBanner({ t }: { t: T }) {
+  if (!hasLegacyWallet()) return null;
+  return (
+    <div className="legacy-banner">
+      <p>{t('legacyDetected')}</p>
+      <a className="button dark" href={LEGACY_WALLET_URL}>{t('legacyOpenOld')}</a>
+    </div>
+  );
+}
+
+/** Always-available, low-key link to the previous web wallet. */
+export function LegacyLink({ t }: { t: T }) {
+  return <p className="center small"><a href={LEGACY_WALLET_URL}>{t('legacyLink')}</a></p>;
+}
+
 function Centered({ children }: { children: React.ReactNode }) {
   return <div className="centered card">{children}</div>;
 }
@@ -103,6 +119,7 @@ function Onboarding({ t, service, error }: { t: T; service: WalletService; error
   if (step === 'choose') {
     return (
       <div className="card narrow">
+        <LegacyBanner t={t} />
         <h1>{t('welcome')}</h1>
         <p>{t('welcomeText')}</p>
         {error && <p className="error">{error}</p>}
@@ -110,6 +127,7 @@ function Onboarding({ t, service, error }: { t: T; service: WalletService; error
           {t('createWallet')}
         </button>
         <button onClick={() => setStep('restore')}>{t('restoreWallet')}</button>
+        <LegacyLink t={t} />
       </div>
     );
   }
@@ -273,7 +291,13 @@ function PasswordForm({ t, onBack, onSubmit }: { t: T; onBack: () => void; onSub
   );
 }
 
-function Unlock({ t, service, error }: { t: T; service: WalletService; error?: string }) {
+function Unlock({ t, service, error, nodeError, settings }: {
+  t: T;
+  service: WalletService;
+  error?: string;
+  nodeError?: WalletState['nodeError'];
+  settings: Settings;
+}) {
   const [pw, setPw] = useState('');
   const [busy, setBusy] = useState(false);
   const submit = async (e: React.FormEvent) => {
@@ -282,8 +306,14 @@ function Unlock({ t, service, error }: { t: T; service: WalletService; error?: s
     try {
       await service.unlock(pw);
     } catch {
+      /* error is shown from wallet state */
+    } finally {
       setBusy(false);
     }
+  };
+  const usePublicNode = () => {
+    saveSettings({ ...settings, nodeMode: 'public' });
+    location.reload();
   };
   const forget = () => {
     if (prompt(t('forgetConfirm')) !== 'DELETE') return;
@@ -294,9 +324,21 @@ function Unlock({ t, service, error }: { t: T; service: WalletService; error?: s
     <form className="card narrow" onSubmit={submit}>
       <h2>{t('unlockTitle')}</h2>
       <label>{t('password')}<input type="password" autoFocus autoComplete="current-password" value={pw} onChange={(e) => setPw(e.target.value)} /></label>
-      {error && <p className="error">{error}</p>}
-      <button className="primary" type="submit" disabled={busy || !pw}>{t('unlock')}</button>
+      {nodeError ? (
+        <div className="stack">
+          <p className="error">{t('nodeUnreachable')}</p>
+          <p className="muted small">{nodeError.tried.join(', ')}</p>
+          {settings.nodeMode === 'custom'
+            ? <button type="button" className="dark" onClick={usePublicNode}>{t('nodeUsePublic')}</button>
+            : <p className="muted small">{t('nodeUnreachableHelp')}</p>}
+        </div>
+      ) : (
+        error && <p className="error">{error}</p>
+      )}
+      <button className="primary" type="submit" disabled={busy || !pw}>{nodeError ? t('retry') : t('unlock')}</button>
       <button type="button" className="link danger" onClick={forget}>{t('forgetWallet')}</button>
+      <LegacyBanner t={t} />
+      {!hasLegacyWallet() && <LegacyLink t={t} />}
     </form>
   );
 }
