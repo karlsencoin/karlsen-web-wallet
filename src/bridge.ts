@@ -4,6 +4,7 @@ import { BRIDGE_API_URL } from './config';
 import type { BridgeDepositResult } from './wallet';
 
 export interface BridgeStatus {
+  /** @deprecated Same value as depositAddress; kept for daemon compatibility. */
   vaultAddress: string;
   depositAddress: string;
   coldVaultAddress: string;

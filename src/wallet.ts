@@ -384,7 +384,7 @@ export class WalletService {
    * intent inside WASM with the key of an input address (keys never reach JS).
    * Needs the SDK built from rusty-karlsen feat/wallet-bridge-sign-message.
    */
-  async bridgeDeposit(walletSecret: string, vaultAddress: string, amountSompi: bigint, solanaDestination: string, feeRate?: number): Promise<BridgeDepositResult> {
+  async bridgeDeposit(walletSecret: string, depositAddress: string, amountSompi: bigint, solanaDestination: string, feeRate?: number): Promise<BridgeDepositResult> {
     const w = this.requireWallet() as unknown as { accountsBridgeDeposit?: (req: unknown) => Promise<BridgeDepositResult> };
     if (typeof w.accountsBridgeDeposit !== 'function') {
       throw new Error('This wallet build has no bridge support (SDK without accountsBridgeDeposit).');
@@ -392,7 +392,8 @@ export class WalletService {
     const res = await w.accountsBridgeDeposit({
       walletSecret,
       accountId: this.requireAccount().accountId,
-      vaultAddress,
+      // Intent field name is frozen in wire format v1; it carries the deposit (hot wallet) address.
+      vaultAddress: depositAddress,
       amountSompi,
       solanaDestination,
       // A payment with an output needs an explicit fee source; 0n = SenderPays(0).

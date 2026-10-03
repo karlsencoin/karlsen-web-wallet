@@ -1,5 +1,5 @@
-// wKLS bridge dialog: KLS -> wKLS deposits (pay + signed intent), deposit and
-// burn status, and instructions for the wKLS -> KLS direction.
+// wKLS bridge dialog: KLS -> wKLS deposits (pay + signed intent), wKLS -> KLS
+// withdrawals (burn signed in Phantom, payout by the bridge), and history.
 import { useCallback, useEffect, useState } from 'react';
 import type { TKey } from './i18n';
 import type { WalletService, WalletState } from './wallet';
@@ -16,6 +16,21 @@ import {
   type DepositView,
   type WireIntent,
 } from './bridge';
+// solana-burn pulls in @solana/web3.js; it is loaded only when a withdrawal starts.
+import type { BurnProgress, TxLanding } from './solana-burn';
+const loadBurn = () => import('./solana-burn');
+
+/** Phantom's injected provider, detected without loading web3.js. */
+interface PhantomLite {
+  isPhantom?: boolean;
+  publicKey?: { toBase58(): string } | null;
+  connect(): Promise<{ publicKey: { toBase58(): string } }>;
+}
+
+function phantomProvider(): PhantomLite | undefined {
+  const p = (window as unknown as { phantom?: { solana?: PhantomLite } }).phantom?.solana;
+  return p?.isPhantom ? p : undefined;
+}
 
 type T = (k: TKey) => string;
 type Tab = 'deposit' | 'withdraw' | 'history';
@@ -84,7 +99,7 @@ export function BridgeDialog({ t, service, state }: { t: T; service: WalletServi
       {statusErr && <p className="error">{t('bridgeUnreachable')}: {statusErr}</p>}
       <Outbox t={t} />
       {tab === 'deposit' && <Deposit t={t} service={service} state={state} status={status} onChange={loadStatus} />}
-      {tab === 'withdraw' && <Withdraw t={t} status={status} />}
+      {tab === 'withdraw' && <Withdraw t={t} state={state} status={status} onChange={loadStatus} />}
       {tab === 'history' && <History t={t} />}
     </div>
   );
@@ -137,7 +152,7 @@ function Deposit({ t, service, state, status, onChange }: { t: T; service: Walle
       // Re-read the deposit address right before paying: it is what gets signed.
       const fresh = await bridgeApi.status();
       if (!fresh.accepting) throw new Error(t('bridgeNotAccepting'));
-      const res = await service.bridgeDeposit(pw, fresh.vaultAddress, sompi, sol.trim());
+      const res = await service.bridgeDeposit(pw, fresh.depositAddress, sompi, sol.trim());
       setPw('');
       rememberSolana(sol.trim());
       const wire = toWire(res);
@@ -165,7 +180,7 @@ function Deposit({ t, service, state, status, onChange }: { t: T; service: Walle
             <tr><td>{t('bridgeMinimum')}</td><td>{fmtKls(status.minDepositKls)} KLS</td></tr>
             <tr><td>{t('bridgeDailyLeft')}</td><td>{fmtKls(status.dailyRemainingKls)} / {fmtKls(status.dailyCapKls)} KLS</td></tr>
             <tr><td>{t('bridgeConfirmations')}</td><td>{status.confirmations} DAA (~{Math.max(1, Math.round(status.confirmations / 60))} min)</td></tr>
-            <tr><td>{t('bridgeDepositAddress')}</td><td className="txid">{status.vaultAddress}</td></tr>
+            <tr><td>{t('bridgeDepositAddress')}</td><td className="txid">{status.depositAddress}</td></tr>
           </tbody>
         </table>
       )}
@@ -265,10 +280,108 @@ function Outbox({ t }: { t: T }) {
 
 // ------------------------------------------------------------------ withdraw
 
-function Withdraw({ t, status }: { t: T; status?: BridgeStatus }) {
+const PHANTOM_URL = 'https://phantom.app/';
+
+function burnStatusText(t: T, s: string): string {
+  const map: Record<string, TKey> = {
+    pending: 'bridgeBurnStPending',
+    sending: 'bridgeBurnStSending',
+    paid: 'bridgeBurnStPaid',
+    done: 'bridgeBurnStDone',
+    refund: 'bridgeBurnStRefund',
+    refunded: 'bridgeBurnStRefunded',
+    manual: 'bridgeStManual',
+  };
+  return map[s] ? t(map[s]) : s;
+}
+
+function progressText(t: T, p?: BurnProgress): string {
+  if (!p) return t('bridgeWithdrawButton');
+  switch (p.step) {
+    case 'preparing':
+      return p.attempt > 1 ? `${t('bridgeWdPreparing')} (${p.attempt})` : t('bridgeWdPreparing');
+    case 'verifying':
+      return t('bridgeWdVerifying');
+    case 'signing':
+      return t('bridgeWdSigning');
+    case 'submitted':
+      return t('bridgeWdSubmitted');
+  }
+}
+
+function Withdraw({ t, state, status, onChange }: { t: T; state: WalletState; status?: BridgeStatus; onChange: () => void }) {
+  const [owner, setOwner] = useState<string | undefined>(() => phantomProvider()?.publicKey?.toBase58());
+  const [dest, setDest] = useState(state.receiveAddress ?? '');
+  const [amount, setAmount] = useState('');
+  const [progress, setProgress] = useState<BurnProgress>();
+  const [err, setErr] = useState<string>();
+  const [done, setDone] = useState<{ burnId: number; signature: string; lastValidBlockHeight: number; amountKls: string; dest: string }>();
+
+  // The wallet's own receive address is the natural destination; fill it once it is known.
+  useEffect(() => {
+    if (!dest && state.receiveAddress) setDest(state.receiveAddress);
+  }, [state.receiveAddress, dest]);
+
+  if (done) return <BurnTracker t={t} {...done} onRetry={() => setDone(undefined)} />;
+
+  const hasPhantom = !!phantomProvider();
+  const busy = !!progress && progress.step !== 'submitted';
+
+  const connect = async () => {
+    setErr(undefined);
+    try {
+      const p = phantomProvider();
+      if (!p) throw new Error(t('bridgeWdNoPhantom'));
+      // Phantom only connects from a secure context (https or localhost).
+      if (!window.isSecureContext) throw new Error(t('bridgeWdInsecure'));
+      // Called directly in the click handler (no await before it) so the
+      // Phantom approval window is tied to the user's click.
+      const pk = (await p.connect()).publicKey.toBase58();
+      setOwner(pk);
+      rememberSolana(pk);
+    } catch (e) {
+      setErr(errText(e));
+    }
+  };
+
+  const check = (): bigint => {
+    if (!status) throw new Error(t('bridgeUnreachable'));
+    if (!status.payingOut) throw new Error(t('bridgeNotPaying'));
+    if (!/^\d+(\.\d{1,8})?$/.test(amount.trim())) throw new Error(t('invalidAmount'));
+    const sompi = klsToSompi(amount.trim());
+    if (sompi <= 0n) throw new Error(t('invalidAmount'));
+    if (sompi < klsToSompi(status.minBurnKls)) throw new Error(`${t('bridgeBelowMin')} ${fmtKls(status.minBurnKls)} wKLS`);
+    if (sompi > klsToSompi(status.dailyPayoutRemainingKls)) {
+      throw new Error(`${t('bridgeWdAboveDaily')} (${fmtKls(status.dailyPayoutRemainingKls)} wKLS)`);
+    }
+    if (!dest.trim().startsWith('karlsen:')) throw new Error(t('bridgeWdBadDest'));
+    return sompi;
+  };
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErr(undefined);
+    let sompi: bigint;
+    try {
+      sompi = check();
+    } catch (x) {
+      return setErr(errText(x));
+    }
+    try {
+      const res = await (await loadBurn()).prepareAndBurn(sompi, dest.trim(), setProgress);
+      setDone({ ...res, amountKls: amount.trim(), dest: dest.trim() });
+      onChange();
+    } catch (x) {
+      // USER_REJECTED: nothing happened, no need for a loud error.
+      if ((x as { code?: string })?.code === 'USER_REJECTED') setErr(t('bridgeWdRejected'));
+      else setErr(errText(x));
+    } finally {
+      setProgress(undefined);
+    }
+  };
+
   return (
-    <div className="stack">
-      <p>{t('bridgeWithdrawText')}</p>
+    <form className="stack" onSubmit={submit}>
       {status && (
         <table className="bridge-kv small">
           <tbody>
@@ -276,11 +389,131 @@ function Withdraw({ t, status }: { t: T; status?: BridgeStatus }) {
             <tr><td>{t('bridgeMinimum')}</td><td>{fmtKls(status.minBurnKls)} wKLS</td></tr>
             <tr><td>{t('bridgeDailyLeft')}</td><td>{fmtKls(status.dailyPayoutRemainingKls)} / {fmtKls(status.dailyPayoutCapKls)} KLS</td></tr>
             <tr><td>wKLS mint</td><td className="txid">{status.wklsMint ?? '–'}</td></tr>
-            <tr><td>Program</td><td className="txid">{status.programId}</td></tr>
           </tbody>
         </table>
       )}
+      <p className="muted small">{t('bridgeWithdrawIntro')}</p>
+
+      {!hasPhantom && (
+        <p className="warning small">
+          {t('bridgeWdNoPhantom')}{' '}
+          <a href={PHANTOM_URL} target="_blank" rel="noreferrer noopener">phantom.app</a>
+        </p>
+      )}
+      {hasPhantom && !owner && (
+        <button className="dark" type="button" onClick={connect}>{t('bridgeWdConnect')}</button>
+      )}
+      {owner && (
+        <>
+          <label className="small">{t('bridgeWdFrom')}</label>
+          <div className="txid small">{owner}</div>
+
+          <label className="small">{t('bridgeWdDestLabel')}</label>
+          <input value={dest} onChange={(e) => setDest(e.target.value)} placeholder="karlsen:q…" spellCheck={false} autoComplete="off" />
+          {state.receiveAddress && dest.trim() !== state.receiveAddress && (
+            <p className="warning small">
+              {t('bridgeWdNotOwnAddress')}{' '}
+              <a href="#" onClick={(e) => { e.preventDefault(); setDest(state.receiveAddress ?? ''); }}>{t('bridgeWdUseOwn')}</a>
+            </p>
+          )}
+
+          <label className="small">{t('bridgeWdAmountLabel')}</label>
+          <input value={amount} inputMode="decimal" onChange={(e) => setAmount(e.target.value)} placeholder={status ? `${t('bridgeWdMinHint')} ${fmtKls(status.minBurnKls)}` : ''} />
+          <p className="muted small">{t('bridgeWdYouReceive')}</p>
+
+          <p className="muted small">{t('bridgeWdHowItWorks')}</p>
+          {err && <p className="error">{err}</p>}
+          <button className="dark" type="submit" disabled={busy || !status?.payingOut}>
+            {busy ? progressText(t, progress) : t('bridgeWithdrawButton')}
+          </button>
+        </>
+      )}
+      {!owner && err && <p className="error">{err}</p>}
       <p className="muted small">{t('bridgeWithdrawRefund')}</p>
+    </form>
+  );
+}
+
+function BurnTracker({
+  t,
+  burnId,
+  signature,
+  lastValidBlockHeight,
+  amountKls,
+  dest,
+  onRetry,
+}: {
+  t: T;
+  burnId: number;
+  signature: string;
+  lastValidBlockHeight: number;
+  amountKls: string;
+  dest: string;
+  onRetry: () => void;
+}) {
+  const [view, setView] = useState<BurnView>();
+  const [landing, setLanding] = useState<TxLanding>('pending');
+  const [waited, setWaited] = useState(0);
+  const notLanded = landing === 'expired' || landing === 'failed';
+
+  useEffect(() => {
+    if (notLanded || (view && (view.status === 'done' || view.status === 'refunded'))) return;
+    const poll = async () => {
+      try {
+        setView(await bridgeApi.burn(String(burnId)));
+        return;
+      } catch {
+        // 404 until Solana finalizes the burn and the daemon picks it up (~30-60 s).
+      }
+      try {
+        setLanding(await (await loadBurn()).burnTxState(signature, lastValidBlockHeight));
+      } catch {
+        /* daemon unreachable: keep waiting */
+      }
+      setWaited((w) => w + 1);
+    };
+    void poll();
+    const id = setInterval(poll, 10_000);
+    return () => clearInterval(id);
+  }, [burnId, signature, lastValidBlockHeight, view, notLanded]);
+
+  if (notLanded) {
+    return (
+      <div className="stack">
+        <p className="warning">{landing === 'failed' ? t('bridgeWdTxFailed') : t('bridgeWdTxExpired')}</p>
+        <table className="bridge-kv small">
+          <tbody>
+            <tr><td>{t('bridgeBurnTx')}</td><td className="txid">{signature}</td></tr>
+          </tbody>
+        </table>
+        <button className="dark" type="button" onClick={onRetry}>{t('bridgeWdTryAgain')}</button>
+      </div>
+    );
+  }
+
+  const stateText = view
+    ? burnStatusText(t, view.status)
+    : landing === 'pending'
+      ? t('bridgeBurnStLanding')
+      : t('bridgeBurnStFinalizing');
+
+  return (
+    <div className="stack">
+      <p className="ok">{view || landing !== 'pending' ? t('bridgeWdSent') : t('bridgeWdSubmittedWait')}</p>
+      <table className="bridge-kv small">
+        <tbody>
+          <tr><td>{t('bridgeWdAmountLabel')}</td><td>{fmtKls(amountKls)} wKLS</td></tr>
+          <tr><td>{t('bridgeWdDestLabel')}</td><td className="txid">{dest}</td></tr>
+          <tr><td>{t('bridgeBurnTx')}</td><td><a className="txid" href={solTx(signature)} target="_blank" rel="noreferrer noopener">{signature}</a></td></tr>
+          <tr><td>{t('bridgeStatus')}</td><td>{stateText}</td></tr>
+          {view?.note && <tr><td>{t('bridgeNote')}</td><td>{view.note}</td></tr>}
+          {view?.payoutTxId && (
+            <tr><td>{t('bridgePayoutTx')}</td><td><a className="txid" href={KARLSEN_TX_URL + view.payoutTxId} target="_blank" rel="noreferrer noopener">{view.payoutTxId}</a></td></tr>
+          )}
+        </tbody>
+      </table>
+      {!view && waited >= 18 && <p className="warning small">{t('bridgeWdSlow')}</p>}
+      <p className="muted small">{t('bridgeTrackerHint')}</p>
     </div>
   );
 }
@@ -340,7 +573,7 @@ function History({ t }: { t: T }) {
           {!burns.length && <p className="muted small">{t('bridgeNone')}</p>}
           {burns.map((b) => (
             <div key={b.burnId} className="bridge-item small">
-              <b>{fmtKls(b.amountKls)} wKLS</b> → {b.destination} · {b.status} · {when(b.detectedAtMs)}
+              <b>{fmtKls(b.amountKls)} wKLS</b> → {b.destination} · {burnStatusText(t, b.status)} · {when(b.detectedAtMs)}
               {b.payoutTxId && (<><br /><a className="txid" href={KARLSEN_TX_URL + b.payoutTxId} target="_blank" rel="noreferrer noopener">{b.payoutTxId}</a> ({fmtKls(b.paidKls)} KLS)</>)}
               {b.note && <><br /><span className="muted">{b.note}</span></>}
             </div>

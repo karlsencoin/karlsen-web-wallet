@@ -8,3 +8,4 @@ dist
 public/karlsen-wasm/
 # One-off migration helper for the old wallet translations
 import-old-i18n.mjs
+.env.production
