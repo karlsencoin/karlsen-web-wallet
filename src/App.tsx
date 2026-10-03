@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { WalletService, type WalletState } from './wallet';
-import { LANGUAGES, LEGACY_WALLET_URL, hasLegacyWallet, loadSettings, saveSettings, type Settings } from './config';
+import { LANGUAGES, LEGACY_WALLET_URL, hasLegacyWallet, loadSettings, saveSettings, usesDesktopLocalNode, type Settings } from './config';
+import { desktopText } from './desktopText';
 import { translator, type TKey } from './i18n';
 import { SeedGrid } from './SeedGrid';
 import { Main } from './Classic';
@@ -69,7 +70,7 @@ export default function App() {
   return (
     <div className="app">
       <header className="topbar">
-        <img src="/karlsen.svg" alt="" width={28} height={28} title={t('appTitle')} />
+        <img src={`${import.meta.env.BASE_URL}karlsen.svg`} alt="" width={28} height={28} title={t('appTitle')} />
         <div className="tools">
           {state.phase === 'ready' && (
             <button className="icon" title={t('lock')} onClick={() => void service.lock()}><LockIcon /></button>
@@ -330,7 +331,9 @@ function Unlock({ t, service, error, nodeError, settings }: {
           <p className="muted small">{nodeError.tried.join(', ')}</p>
           {settings.nodeMode === 'custom'
             ? <button type="button" className="dark" onClick={usePublicNode}>{t('nodeUsePublic')}</button>
-            : <p className="muted small">{t('nodeUnreachableHelp')}</p>}
+            : usesDesktopLocalNode(settings)
+              ? <p className="muted small">{desktopText(settings.lang, 'desktopNodeUnreachable')}</p>
+              : <p className="muted small">{t('nodeUnreachableHelp')}</p>}
         </div>
       ) : (
         error && <p className="error">{error}</p>

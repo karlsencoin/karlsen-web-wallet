@@ -3,7 +3,7 @@
 //   walletCreate -> walletOpen -> accountsEnsureDefault -> connect -> start
 //   -> accountsEnumerate -> accountsActivate -> events (balance, pending, maturity, ...)
 import { loadSdk, type Sdk } from './sdk';
-import { WALLET_FILENAME, nodeCandidates, type Settings } from './config';
+import { DESKTOP_LOCAL_NODE, WALLET_FILENAME, nodeCandidates, publicNodeUrls, usesDesktopLocalNode, type Settings } from './config';
 import type {
   Wallet,
   IAccountDescriptor,
@@ -14,12 +14,31 @@ import type {
 
 export type Phase = 'loading' | 'no-wallet' | 'locked' | 'opening' | 'ready' | 'error';
 
+/** Which kind of node the wallet is talking to. */
+export type NodeSource = 'local' | 'public' | 'custom';
+
+/** Last probe of the node bundled with Karlsen Desktop (only set inside Desktop). */
+export interface LocalNodeStatus {
+  /** The node answered on its wRPC port. */
+  reachable: boolean;
+  /** The node reports itself synced with the network. */
+  synced: boolean;
+  /** The node runs with --utxoindex (required for balances). */
+  utxoIndex: boolean;
+  /** Virtual DAA score of the local node, used to estimate sync progress. */
+  daaScore?: bigint;
+}
+
 export interface WalletState {
   phase: Phase;
   error?: string;
   connected: boolean;
   synced: boolean;
   nodeUrl?: string;
+  /** Kind of node behind nodeUrl. */
+  nodeSource?: NodeSource;
+  /** Karlsen Desktop: state of the bundled local node, refreshed every LOCAL_NODE_POLL_MS. */
+  localNode?: LocalNodeStatus;
   daaScore?: bigint;
   account?: IAccountDescriptor;
   receiveAddress?: string;
@@ -54,6 +73,22 @@ type Listener = (s: WalletState) => void;
 
 /** How long one node gets to answer before the next candidate is tried. */
 const NODE_CONNECT_TIMEOUT_MS = 15_000;
+
+/** Karlsen Desktop: how often the local node is probed while the wallet uses the public node. */
+const LOCAL_NODE_POLL_MS = 30_000;
+
+/** Karlsen Desktop: time budget for one local node probe. */
+const LOCAL_NODE_PROBE_TIMEOUT_MS = 5_000;
+
+function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    p,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${what}: timeout after ${ms / 1000}s`)), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
 
 /** Thrown when none of the candidate nodes could be reached. */
 export class NodeUnreachableError extends Error {
@@ -90,6 +125,12 @@ export class WalletService {
   private historyTimer?: number;
   /** Last balance per account id; balance events can arrive before the account is in state. */
   private balances = new Map<string, IBalance>();
+  /** Karlsen Desktop: timer of the local node monitor. */
+  private localTimer?: number;
+  /** Number of running operations that must not see a node switch (send, compound, bridge). */
+  private busyOps = 0;
+  /** True while the wallet is moving from one node to another. */
+  private switching = false;
   state: WalletState = { phase: 'loading', connected: false, synced: false, transactions: [], txTotal: 0, txPage: 0 };
 
   constructor(private settings: Settings) {}
@@ -205,10 +246,10 @@ export class WalletService {
    * Connects to the first candidate node that answers within the timeout.
    * The SDK's own retry loop would otherwise keep a dead URL spinning forever.
    */
-  private async connectAny(w: Wallet): Promise<string> {
+  private async connectAny(w: Wallet, candidates: string[] = nodeCandidates(this.settings)): Promise<string> {
     const tried: string[] = [];
     let last: unknown;
-    for (const url of nodeCandidates(this.settings)) {
+    for (const url of candidates) {
       tried.push(url);
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
@@ -243,8 +284,8 @@ export class WalletService {
       type: new sdk.AccountKind('bip32'),
       ...(mnemonic ? { mnemonic } : {}),
     });
-    const nodeUrl = await this.connectAny(w);
-    this.set({ connected: true, synced: !!w.isSynced, nodeError: undefined });
+    const nodeUrl = await this.connectAny(w, await this.initialCandidates());
+    this.set({ connected: true, synced: !!w.isSynced, nodeError: undefined, nodeSource: this.sourceOf(nodeUrl) });
     await w.start();
     const { accountDescriptors } = await w.accountsEnumerate({});
     const account = accountDescriptors[0];
@@ -261,6 +302,122 @@ export class WalletService {
     const cached = this.balances.get(String(account.accountId));
     if (cached) this.set({ balance: cached });
     void this.refreshHistory();
+    this.startLocalMonitor();
+  }
+
+  // ------------------------------------------------------------ Karlsen Desktop local node
+
+  private sourceOf(url: string): NodeSource {
+    if (DESKTOP_LOCAL_NODE && url === DESKTOP_LOCAL_NODE) return 'local';
+    return this.settings.nodeMode === 'custom' ? 'custom' : 'public';
+  }
+
+  /**
+   * Node order for the first connection. Outside Desktop this is the unchanged failover list.
+   * Inside Desktop: the local node first when it is synced; otherwise the public node first and the
+   * local node as a last resort. With localOnly the local node is the only candidate.
+   */
+  private async initialCandidates(): Promise<string[]> {
+    if (!usesDesktopLocalNode(this.settings) || !DESKTOP_LOCAL_NODE) return nodeCandidates(this.settings);
+    if (this.settings.localOnly) return [DESKTOP_LOCAL_NODE];
+    const local = await this.probeLocalNode();
+    const pub = publicNodeUrls().filter((u) => u !== DESKTOP_LOCAL_NODE);
+    return local.synced && local.utxoIndex ? [DESKTOP_LOCAL_NODE, ...pub] : [...pub, DESKTOP_LOCAL_NODE];
+  }
+
+  /** Asks the bundled node for its sync state over a short-lived RPC connection. */
+  private async probeLocalNode(): Promise<LocalNodeStatus> {
+    const down: LocalNodeStatus = { reachable: false, synced: false, utxoIndex: false };
+    if (!DESKTOP_LOCAL_NODE) return down;
+    const sdk = this.sdk as any;
+    let rpc: any;
+    let status = down;
+    try {
+      rpc = new sdk.RpcClient({ url: DESKTOP_LOCAL_NODE, encoding: sdk.Encoding.Borsh, networkId: this.settings.networkId });
+      await withTimeout(rpc.connect({ blockAsyncConnect: true, strategy: 'fallback', timeoutDuration: LOCAL_NODE_PROBE_TIMEOUT_MS }), LOCAL_NODE_PROBE_TIMEOUT_MS + 1_000, 'local node');
+      const info = await withTimeout<any>(rpc.getServerInfo(), LOCAL_NODE_PROBE_TIMEOUT_MS, 'local node');
+      status = {
+        reachable: true,
+        synced: !!info?.isSynced,
+        utxoIndex: !!info?.hasUtxoIndex,
+        daaScore: info?.virtualDaaScore != null ? BigInt(info.virtualDaaScore) : undefined,
+      };
+    } catch {
+      /* node still starting or stopped: reported as unreachable */
+    } finally {
+      try {
+        await rpc?.disconnect();
+      } catch {
+        /* ignore */
+      }
+    }
+    this.set({ localNode: status });
+    return status;
+  }
+
+  /** Starts the 30 s local node monitor (Desktop only, idempotent). */
+  private startLocalMonitor(): void {
+    if (!usesDesktopLocalNode(this.settings) || this.localTimer !== undefined) return;
+    const tick = () => void this.localMonitorTick();
+    this.localTimer = window.setInterval(tick, LOCAL_NODE_POLL_MS);
+    tick();
+  }
+
+  private stopLocalMonitor(): void {
+    window.clearInterval(this.localTimer);
+    this.localTimer = undefined;
+  }
+
+  /** Moves the wallet to the local node once it is synced; never during a send or another switch. */
+  private async localMonitorTick(): Promise<void> {
+    if (this.state.phase !== 'ready' || this.switching) return;
+    if (this.state.nodeSource === 'local' && this.state.connected) {
+      // Already local: keep the status line fresh without opening extra connections.
+      this.set({ localNode: { reachable: true, synced: this.state.synced, utxoIndex: true, daaScore: this.state.daaScore } });
+      return;
+    }
+    const local = await this.probeLocalNode();
+    if (!local.synced || !local.utxoIndex || this.busyOps > 0 || this.state.phase !== 'ready') return;
+    await this.switchNode(DESKTOP_LOCAL_NODE!);
+  }
+
+  /** Reconnects the running wallet to another node; on failure returns to the public node. */
+  private async switchNode(url: string): Promise<void> {
+    const w = this.wallet;
+    if (!w || this.switching) return;
+    this.switching = true;
+    try {
+      try {
+        await w.stop();
+        await w.disconnect();
+      } catch {
+        /* best effort */
+      }
+      let nodeUrl: string;
+      try {
+        nodeUrl = await this.connectAny(w, [url]);
+      } catch {
+        nodeUrl = await this.connectAny(w, publicNodeUrls());
+      }
+      await w.start();
+      this.set({ connected: true, synced: !!w.isSynced, nodeUrl, nodeSource: this.sourceOf(nodeUrl) });
+      await this.activateCurrentAccount();
+      this.scheduleHistoryRefresh();
+    } catch (e) {
+      this.set({ error: errText(e) });
+    } finally {
+      this.switching = false;
+    }
+  }
+
+  /** Runs an operation that must finish on the node it started on. */
+  private async guarded<T>(fn: () => Promise<T>): Promise<T> {
+    this.busyOps++;
+    try {
+      return await fn();
+    } finally {
+      this.busyOps--;
+    }
   }
 
   /** (Re)activates the current account so its addresses are scanned and subscribed. */
@@ -275,6 +432,7 @@ export class WalletService {
   }
 
   async lock(): Promise<void> {
+    this.stopLocalMonitor();
     const w = this.requireWallet();
     try {
       await w.stop();
@@ -356,25 +514,25 @@ export class WalletService {
 
   async estimate(address: string, amount: bigint, feeRate?: number, receiverPays = false): Promise<SendEstimate> {
     const w = this.requireWallet();
-    const { generatorSummary: s } = await w.accountsEstimate({
+    const { generatorSummary: s } = await this.guarded(() => w.accountsEstimate({
       accountId: this.requireAccount().accountId,
       destination: [{ address: address.trim(), amount }],
       priorityFeeSompi: this.feeSetting(receiverPays) as any,
       ...(feeRate ? { feeRate } : {}),
-    });
+    }));
     return { fees: s.fees, finalAmount: s.finalAmount, transactions: s.transactions, utxos: s.utxos };
   }
 
   /** Sends KLS. The password is required again for every payment. */
   async send(walletSecret: string, address: string, amount: bigint, feeRate?: number, receiverPays = false): Promise<string[]> {
     const w = this.requireWallet();
-    const res = await w.accountsSend({
+    const res = await this.guarded(() => w.accountsSend({
       walletSecret,
       accountId: this.requireAccount().accountId,
       destination: [{ address: address.trim(), amount }],
       priorityFeeSompi: this.feeSetting(receiverPays) as any,
       ...(feeRate ? { feeRate } : {}),
-    });
+    }));
     this.scheduleHistoryRefresh();
     return res.transactionIds;
   }
@@ -389,7 +547,7 @@ export class WalletService {
     if (typeof w.accountsBridgeDeposit !== 'function') {
       throw new Error('This wallet build has no bridge support (SDK without accountsBridgeDeposit).');
     }
-    const res = await w.accountsBridgeDeposit({
+    const res = await this.guarded(() => w.accountsBridgeDeposit!({
       walletSecret,
       accountId: this.requireAccount().accountId,
       // Intent field name is frozen in wire format v1; it carries the deposit (hot wallet) address.
@@ -399,7 +557,7 @@ export class WalletService {
       // A payment with an output needs an explicit fee source; 0n = SenderPays(0).
       priorityFeeSompi: 0n,
       ...(feeRate ? { feeRate } : {}),
-    });
+    }));
     this.scheduleHistoryRefresh();
     return res;
   }
@@ -407,12 +565,12 @@ export class WalletService {
   /** Compounds all UTXOs of the account into a single change output. */
   async compound(walletSecret: string): Promise<string[]> {
     const w = this.requireWallet();
-    const res = await w.accountsSend({
+    const res = await this.guarded(() => w.accountsSend({
       walletSecret,
       accountId: this.requireAccount().accountId,
       // No priorityFeeSompi: a sweep (no destination) only accepts Fees::None.
       // Passing 0n is read by the SDK as Fees::SenderPays(0) and rejected.
-    });
+    }));
     this.scheduleHistoryRefresh();
     return res.transactionIds;
   }

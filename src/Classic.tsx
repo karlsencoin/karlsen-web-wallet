@@ -6,7 +6,8 @@ import { useEffect, useRef, useState } from 'react';
 import QRCode from 'qrcode';
 import type { ITransactionRecord } from './karlsen-sdk';
 import { HISTORY_PAGE_SIZE, txSummary, type DagInfo, type WalletService, type WalletState } from './wallet';
-import { APP_VERSION, DONATION_ADDRESS, FEATURES, LANGUAGES, LEGACY_WALLET_URL, publicNodeUrls, saveSettings, validateNodeUrl, type Settings } from './config';
+import { APP_VERSION, DONATION_ADDRESS, FEATURES, LANGUAGES, LEGACY_WALLET_URL, publicNodeUrls, saveSettings, usesDesktopLocalNode, validateNodeUrl, type Settings } from './config';
+import { desktopText, localSyncPercent } from './desktopText';
 import type { TKey } from './i18n';
 import { LegacyMigrate } from './LegacyMigrate';
 import { BridgeDialog } from './Bridge';
@@ -47,7 +48,7 @@ export function Main({ t, service, state, settings }: { t: T; service: WalletSer
           <button className="dark" onClick={() => setDialog({ kind: 'send' })}>{t('sendButton')}</button>
           <button className="dark" onClick={() => setDialog({ kind: 'scan' })}>{t('scanQr')}</button>
         </div>
-        <StatusBlock t={t} state={state} />
+        <StatusBlock t={t} state={state} settings={settings} />
       </section>
 
       <section className="right">
@@ -125,14 +126,32 @@ function ReceiveBlock({ t, address }: { t: T; address?: string }) {
   );
 }
 
-function StatusBlock({ t, state }: { t: T; state: WalletState }) {
+function StatusBlock({ t, state, settings }: { t: T; state: WalletState; settings: Settings }) {
   const status = !state.connected ? t('statusOffline') : state.synced ? t('statusOnline') : t('statusSyncing');
   return (
     <div className="walletstatus small">
       <div>{t('walletStatus')}: <span className={state.connected ? (state.synced ? 'okc' : 'warnc') : 'badc'}>{status}</span></div>
       <div>{t('daaScore')}: {state.daaScore != null ? Number(state.daaScore).toLocaleString('en-US') : '—'}</div>
+      {usesDesktopLocalNode(settings) && <DesktopNodeLine state={state} settings={settings} />}
     </div>
   );
+}
+
+/** Karlsen Desktop: which node is in use and how far the bundled local node has synced. */
+function DesktopNodeLine({ state, settings }: { state: WalletState; settings: Settings }) {
+  const lang = settings.lang;
+  const local = state.localNode;
+  if (state.nodeSource === 'local' && state.synced) {
+    return <div className="okc">{desktopText(lang, 'nodeLocal')}</div>;
+  }
+  if (state.nodeSource === 'local') {
+    // localOnly (or public unreachable): connected to a local node that is still syncing.
+    // No public reference is contacted in this mode, so no percentage is shown.
+    return <div className="warnc">{desktopText(lang, state.connected ? 'nodeLocalOnlySyncing' : 'nodeLocalOnlyStarting')}</div>;
+  }
+  if (!local?.reachable) return <div className="warnc">{desktopText(lang, 'nodePublicLocalStarting')}</div>;
+  const p = localSyncPercent(local.daaScore, state.daaScore) ?? 0;
+  return <div className="warnc">{desktopText(lang, 'nodePublicLocalSyncing', p)}</div>;
 }
 
 // ---------------------------------------------------------------- transactions
@@ -759,6 +778,12 @@ function SettingsView({ t, service, settings }: { t: T; service: WalletService; 
           )}
         </div>
       </details>
+      {usesDesktopLocalNode(s) && (
+        <label className="row">
+          <input type="checkbox" checked={s.localOnly} onChange={(e) => setS({ ...s, localOnly: e.target.checked })} />
+          <span>{desktopText(s.lang, 'localOnlyLabel')} <span className="muted small">{desktopText(s.lang, 'localOnlyHelp')}</span></span>
+        </label>
+      )}
       <label>{t('network')}
         <select value={s.networkId} onChange={(e) => setS({ ...s, networkId: e.target.value as Settings['networkId'] })}>
           <option value="mainnet">mainnet</option>

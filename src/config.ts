@@ -30,6 +30,11 @@ export interface Settings {
   lang: Lang;
   /** Colour theme; 'auto' follows the operating system. */
   theme: 'auto' | 'light' | 'dark';
+  /**
+   * Karlsen Desktop only: never fall back to the public node, wait for the bundled local node
+   * to finish syncing instead. Ignored outside Desktop.
+   */
+  localOnly: boolean;
 }
 
 /** Feature flags. The bridge tab stays hidden until the wKLS program and daemon are live. */
@@ -49,6 +54,37 @@ export const WALLET_FILENAME = 'karlsen-web-wallet';
 const SETTINGS_KEY = 'kww.settings';
 
 /**
+ * Public node used when the page is not served from a web origin (Karlsen Desktop serves the
+ * wallet from tauri://localhost or https://tauri.localhost, where a same-origin /wrpc does not exist).
+ */
+const FALLBACK_PUBLIC_NODE = 'wss://wallet.karlsencoin.org/wrpc';
+
+/** True when the page runs inside the Tauri webview of Karlsen Desktop. */
+function isTauriOrigin(): boolean {
+  return location.protocol === 'tauri:' || location.hostname === 'tauri.localhost';
+}
+
+/**
+ * Local node handed over by Karlsen Desktop as ?node=ws://127.0.0.1:43110.
+ * Only loopback ws:// URLs are accepted, so a crafted link cannot point the wallet at a remote node.
+ * Undefined on the website: the parameter is absent there and the wallet behaves exactly as before.
+ */
+export const DESKTOP_LOCAL_NODE: string | undefined = (() => {
+  try {
+    const raw = new URLSearchParams(location.search).get('node');
+    if (!raw) return undefined;
+    const u = new URL(raw);
+    const loopback = u.hostname === '127.0.0.1' || u.hostname === 'localhost' || u.hostname === '[::1]';
+    return u.protocol === 'ws:' && loopback ? u.toString().replace(/\/$/, '') : undefined;
+  } catch {
+    return undefined;
+  }
+})();
+
+/** True when the wallet is embedded in Karlsen Desktop next to its bundled node. */
+export const IS_DESKTOP = DESKTOP_LOCAL_NODE !== undefined;
+
+/**
  * Public node endpoints, tried in order until one answers (simple failover).
  * Build-time override: VITE_PUBLIC_NODE_URLS="wss://a/wrpc,wss://b/wrpc".
  * Default on https: the same origin's /wrpc path, proxied by nginx to karlsend, so
@@ -59,6 +95,7 @@ export function publicNodeUrls(): string[] {
   const fromEnv = (import.meta.env.VITE_PUBLIC_NODE_URLS as string | undefined) ?? '';
   const list = fromEnv.split(',').map((u) => u.trim()).filter(Boolean);
   if (list.length) return list;
+  if (isTauriOrigin()) return [FALLBACK_PUBLIC_NODE];
   if (location.protocol === 'https:') return [`wss://${location.host}/wrpc`];
   return [`ws://${location.hostname || '127.0.0.1'}:43110`];
 }
@@ -66,6 +103,14 @@ export function publicNodeUrls(): string[] {
 /** Endpoints the wallet should try for the given settings, in order. */
 export function nodeCandidates(s: Settings): string[] {
   return s.nodeMode === 'custom' && s.nodeUrl ? [s.nodeUrl] : publicNodeUrls();
+}
+
+/**
+ * Whether the Desktop local-node logic applies: embedded in Desktop and the user has not
+ * chosen a custom node (an explicit custom node always wins).
+ */
+export function usesDesktopLocalNode(s: Settings): boolean {
+  return IS_DESKTOP && s.nodeMode !== 'custom';
 }
 
 /**
@@ -99,7 +144,7 @@ function defaultLang(): Lang {
 }
 
 export function loadSettings(): Settings {
-  const defaults: Settings = { nodeMode: 'public', nodeUrl: '', networkId: 'mainnet', lang: defaultLang(), theme: 'auto' };
+  const defaults: Settings = { nodeMode: 'public', nodeUrl: '', networkId: 'mainnet', lang: defaultLang(), theme: 'auto', localOnly: false };
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
     if (!raw) return defaults;
