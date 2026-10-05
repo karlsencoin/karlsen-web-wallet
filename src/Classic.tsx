@@ -10,7 +10,7 @@ import { APP_VERSION, DONATION_ADDRESS, FEATURES, INITIAL_DIALOG, LANGUAGES, LEG
 import { desktopText, localSyncPercent } from './desktopText';
 import type { TKey } from './i18n';
 import { LegacyMigrate } from './LegacyMigrate';
-import { BridgeDialog } from './Bridge';
+import { BridgeDialog } from './BridgeDialog';
 
 // Karlsen explorer is a kaspa-explorer fork: /txs/<id>.
 export const EXPLORER_TX_URL = 'https://explorer.karlsencoin.org/txs/';
