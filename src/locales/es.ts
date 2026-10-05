@@ -239,6 +239,8 @@ const es: Partial<Dict> = {
   bridgeWdAboveDaily: "Supera lo que aún se puede pagar hoy",
   bridgeWdBadDest: "Introduzca una dirección Karlsen (karlsen:…).",
   bridgeWdNoPhantom: "Los retiros se firman con la billetera Phantom. Instálela para continuar:",
+  bridgeWdDesktopNoPhantom: "Los retiros se firman con Phantom, una extensión del navegador que no puede ejecutarse dentro de Karlsen Desktop. Abra la billetera web en su navegador (con Phantom instalado) y retire desde su ventana Bridge:",
+  bridgeWdOpenInBrowser: "Abrir en el navegador",
   bridgeWdConnect: "Conectar Phantom",
   bridgeWdFrom: "Quemar desde (Phantom)",
   bridgeWdDestLabel: "Dirección Karlsen que recibe los KLS",

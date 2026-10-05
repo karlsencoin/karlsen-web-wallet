@@ -239,6 +239,8 @@ const de: Partial<Dict> = {
   bridgeWdAboveDaily: "Mehr als heute noch ausgezahlt werden kann",
   bridgeWdBadDest: "Geben Sie eine Karlsen-Adresse ein (karlsen:…).",
   bridgeWdNoPhantom: "Auszahlungen werden mit der Phantom-Wallet signiert. Installieren Sie sie, um fortzufahren:",
+  bridgeWdDesktopNoPhantom: "Auszahlungen werden mit Phantom signiert, einer Browser-Erweiterung, die in Karlsen Desktop nicht laufen kann. Öffnen Sie die Web-Wallet in Ihrem Browser (mit installiertem Phantom) und zahlen Sie im Bridge-Fenster aus:",
+  bridgeWdOpenInBrowser: "Im Browser öffnen",
   bridgeWdConnect: "Phantom verbinden",
   bridgeWdFrom: "Verbrennen von (Phantom)",
   bridgeWdDestLabel: "Karlsen-Adresse, die KLS erhält",

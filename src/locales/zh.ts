@@ -239,6 +239,8 @@ const zh: Partial<Dict> = {
   bridgeWdAboveDaily: "超出今日剩余可支付额度",
   bridgeWdBadDest: "请输入 Karlsen 地址（karlsen:…）。",
   bridgeWdNoPhantom: "提现需使用 Phantom 钱包签名。请安装后继续：",
+  bridgeWdDesktopNoPhantom: "提现需使用 Phantom 签名。Phantom 是浏览器扩展，无法在 Karlsen Desktop 中运行。请在已安装 Phantom 的浏览器中打开网页钱包，并在桥接窗口中提现：",
+  bridgeWdOpenInBrowser: "在浏览器中打开",
   bridgeWdConnect: "连接 Phantom",
   bridgeWdFrom: "销毁来源（Phantom）",
   bridgeWdDestLabel: "接收 KLS 的 Karlsen 地址",

@@ -239,6 +239,8 @@ const id: Partial<Dict> = {
   bridgeWdAboveDaily: "Melebihi jumlah yang masih dapat dibayarkan hari ini",
   bridgeWdBadDest: "Masukkan alamat Karlsen (karlsen:…).",
   bridgeWdNoPhantom: "Penarikan ditandatangani dengan dompet Phantom. Pasang untuk melanjutkan:",
+  bridgeWdDesktopNoPhantom: "Penarikan ditandatangani dengan Phantom, ekstensi browser yang tidak dapat berjalan di dalam Karlsen Desktop. Buka dompet web di browser Anda (dengan Phantom terpasang) dan lakukan penarikan dari jendela Bridge:",
+  bridgeWdOpenInBrowser: "Buka di browser",
   bridgeWdConnect: "Hubungkan Phantom",
   bridgeWdFrom: "Bakar dari (Phantom)",
   bridgeWdDestLabel: "Alamat Karlsen penerima KLS",

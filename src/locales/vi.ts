@@ -239,6 +239,8 @@ const vi: Partial<Dict> = {
   bridgeWdAboveDaily: "Vượt quá số còn có thể chi trả hôm nay",
   bridgeWdBadDest: "Nhập địa chỉ Karlsen (karlsen:…).",
   bridgeWdNoPhantom: "Lệnh rút được ký bằng ví Phantom. Hãy cài đặt để tiếp tục:",
+  bridgeWdDesktopNoPhantom: "Lệnh rút được ký bằng Phantom, một tiện ích trình duyệt không thể chạy bên trong Karlsen Desktop. Hãy mở ví web trong trình duyệt của bạn (đã cài Phantom) và rút từ cửa sổ Bridge:",
+  bridgeWdOpenInBrowser: "Mở trong trình duyệt",
   bridgeWdConnect: "Kết nối Phantom",
   bridgeWdFrom: "Đốt từ (Phantom)",
   bridgeWdDestLabel: "Địa chỉ Karlsen nhận KLS",

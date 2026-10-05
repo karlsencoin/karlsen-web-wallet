@@ -239,6 +239,8 @@ const ja: Partial<Dict> = {
   bridgeWdAboveDaily: "本日支払い可能な残り額を超えています",
   bridgeWdBadDest: "Karlsen アドレス（karlsen:…）を入力してください。",
   bridgeWdNoPhantom: "出金は Phantom ウォレットで署名します。続けるにはインストールしてください：",
+  bridgeWdDesktopNoPhantom: "出金は Phantom で署名します。Phantom はブラウザ拡張機能のため、Karlsen Desktop 内では動作しません。Phantom をインストールしたブラウザでウェブウォレットを開き、ブリッジ画面から出金してください：",
+  bridgeWdOpenInBrowser: "ブラウザで開く",
   bridgeWdConnect: "Phantom に接続",
   bridgeWdFrom: "バーン元（Phantom）",
   bridgeWdDestLabel: "KLS を受け取る Karlsen アドレス",

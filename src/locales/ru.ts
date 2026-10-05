@@ -239,6 +239,8 @@ const ru: Partial<Dict> = {
   bridgeWdAboveDaily: "Больше, чем ещё можно выплатить сегодня",
   bridgeWdBadDest: "Введите адрес Karlsen (karlsen:…).",
   bridgeWdNoPhantom: "Выводы подписываются кошельком Phantom. Установите его, чтобы продолжить:",
+  bridgeWdDesktopNoPhantom: "Выводы подписываются в Phantom — расширении браузера, которое не может работать внутри Karlsen Desktop. Откройте веб-кошелёк в браузере (с установленным Phantom) и выполните вывод в окне Bridge:",
+  bridgeWdOpenInBrowser: "Открыть в браузере",
   bridgeWdConnect: "Подключить Phantom",
   bridgeWdFrom: "Сжечь с (Phantom)",
   bridgeWdDestLabel: "Адрес Karlsen для получения KLS",

@@ -239,6 +239,8 @@ const ko: Partial<Dict> = {
   bridgeWdAboveDaily: "오늘 지급 가능한 남은 한도를 초과합니다",
   bridgeWdBadDest: "Karlsen 주소(karlsen:…)를 입력하세요.",
   bridgeWdNoPhantom: "출금은 Phantom 지갑으로 서명합니다. 계속하려면 설치하세요:",
+  bridgeWdDesktopNoPhantom: "출금은 Phantom으로 서명합니다. Phantom은 브라우저 확장 프로그램이라 Karlsen Desktop 안에서는 실행되지 않습니다. Phantom이 설치된 브라우저에서 웹 지갑을 열고 브리지 창에서 출금하세요:",
+  bridgeWdOpenInBrowser: "브라우저에서 열기",
   bridgeWdConnect: "Phantom 연결",
   bridgeWdFrom: "소각할 지갑 (Phantom)",
   bridgeWdDestLabel: "KLS를 받을 Karlsen 주소",

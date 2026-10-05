@@ -239,6 +239,8 @@ const pt: Partial<Dict> = {
   bridgeWdAboveDaily: "Acima do que ainda pode ser pago hoje",
   bridgeWdBadDest: "Informe um endereço Karlsen (karlsen:…).",
   bridgeWdNoPhantom: "Os saques são assinados com a carteira Phantom. Instale-a para continuar:",
+  bridgeWdDesktopNoPhantom: "Os saques são assinados com o Phantom, uma extensão de navegador que não funciona dentro do Karlsen Desktop. Abra a carteira web no seu navegador (com o Phantom instalado) e saque pela janela Bridge:",
+  bridgeWdOpenInBrowser: "Abrir no navegador",
   bridgeWdConnect: "Conectar Phantom",
   bridgeWdFrom: "Queimar de (Phantom)",
   bridgeWdDestLabel: "Endereço Karlsen que recebe os KLS",
