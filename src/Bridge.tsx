@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { TKey } from './i18n';
 import type { WalletService, WalletState } from './wallet';
-import { SOLANA_EXPLORER_SUFFIX } from './config';
+import { IS_DESKTOP, SOLANA_EXPLORER_SUFFIX, WEB_WALLET_BRIDGE_URL } from './config';
 import {
   bridgeApi,
   isSolanaAddress,
@@ -394,7 +394,16 @@ function Withdraw({ t, state, status, onChange }: { t: T; state: WalletState; st
       )}
       <p className="muted small">{t('bridgeWithdrawIntro')}</p>
 
-      {!hasPhantom && (
+      {!hasPhantom && IS_DESKTOP && (
+        <>
+          <p className="warning small">{t('bridgeWdDesktopNoPhantom')}</p>
+          {/* Karlsen Desktop hands links to other origins to the system browser. */}
+          <a className="button dark" href={WEB_WALLET_BRIDGE_URL} target="_blank" rel="noreferrer noopener">
+            {t('bridgeWdOpenInBrowser')}
+          </a>
+        </>
+      )}
+      {!hasPhantom && !IS_DESKTOP && (
         <p className="warning small">
           {t('bridgeWdNoPhantom')}{' '}
           <a href={PHANTOM_URL} target="_blank" rel="noreferrer noopener">phantom.app</a>

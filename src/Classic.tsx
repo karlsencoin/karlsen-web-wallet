@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from 'react';
 import QRCode from 'qrcode';
 import type { ITransactionRecord } from './karlsen-sdk';
 import { HISTORY_PAGE_SIZE, txSummary, type DagInfo, type WalletService, type WalletState } from './wallet';
-import { APP_VERSION, DONATION_ADDRESS, FEATURES, LANGUAGES, LEGACY_WALLET_URL, publicNodeUrls, saveSettings, usesDesktopLocalNode, validateNodeUrl, type Settings } from './config';
+import { APP_VERSION, DONATION_ADDRESS, FEATURES, INITIAL_DIALOG, LANGUAGES, LEGACY_WALLET_URL, publicNodeUrls, saveSettings, usesDesktopLocalNode, validateNodeUrl, type Settings } from './config';
 import { desktopText, localSyncPercent } from './desktopText';
 import type { TKey } from './i18n';
 import { LegacyMigrate } from './LegacyMigrate';
@@ -36,7 +36,9 @@ function errText(e: unknown): string {
 
 export function Main({ t, service, state, settings }: { t: T; service: WalletService; state: WalletState; settings: Settings }) {
   const [tab, setTab] = useState<RightTab>('transactions');
-  const [dialog, setDialog] = useState<Dialog>();
+  const [dialog, setDialog] = useState<Dialog | undefined>(() =>
+    INITIAL_DIALOG === 'bridge' && FEATURES.bridge ? { kind: 'bridge' } : undefined,
+  );
   const close = () => setDialog(undefined);
 
   return (

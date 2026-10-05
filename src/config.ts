@@ -81,6 +81,21 @@ export const DESKTOP_LOCAL_NODE: string | undefined = (() => {
   }
 })();
 
+/**
+ * Web wallet with the Bridge window opened on load (see INITIAL_DIALOG). Karlsen Desktop links here
+ * because Phantom is a browser extension and cannot run in its webview.
+ */
+export const WEB_WALLET_BRIDGE_URL = 'https://wallet.karlsencoin.org/?open=bridge';
+
+/** Dialog requested with ?open=..., opened once the wallet is unlocked. Only 'bridge' is supported. */
+export const INITIAL_DIALOG: 'bridge' | undefined = (() => {
+  try {
+    return new URLSearchParams(location.search).get('open') === 'bridge' ? 'bridge' : undefined;
+  } catch {
+    return undefined;
+  }
+})();
+
 /** True when the wallet is embedded in Karlsen Desktop next to its bundled node. */
 export const IS_DESKTOP = DESKTOP_LOCAL_NODE !== undefined;
 
