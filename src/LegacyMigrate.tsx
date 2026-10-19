@@ -1,4 +1,5 @@
-// UI for moving funds off legacy m/44'/972 addresses (old web wallet, Karlsen-Desktop).
+// UI for moving funds off legacy addresses: m/44'/972 (old web wallet, Karlsen-Desktop v2)
+// and m/44'/111111' (original command-line wallet). Both are scanned automatically.
 // All safety checks live in ./legacy.ts; this component only drives the flow.
 import { useState } from 'react';
 import type { TKey } from './i18n';
@@ -38,6 +39,8 @@ export function LegacyMigrate({ t, service, state }: { t: T; service: WalletServ
   const [scan, setScan] = useState<LegacyScanResult>();
   const [preview, setPreview] = useState<LegacySweepPreview>();
   const [confirmed, setConfirmed] = useState(false);
+  const [testMode, setTestMode] = useState(false);
+  const [lastWasTest, setLastWasTest] = useState(false);
   const [txIds, setTxIds] = useState<string[]>([]);
   const [error, setError] = useState<string>();
 
@@ -69,10 +72,11 @@ export function LegacyMigrate({ t, service, state }: { t: T; service: WalletServ
       setStep('scanned');
     });
 
-  const doPreview = () =>
+  const doPreview = (test: boolean) =>
     run(t('legacyPreparing'), 'scanned', async () => {
       if (!destination || !scan) throw new Error('Wallet address is not ready yet.');
-      const p = await previewLegacySweep(service.sdkHandle, service.rpcClient, service.networkId, seed, scan.funded, destination);
+      setTestMode(test);
+      const p = await previewLegacySweep(service.sdkHandle, service.rpcClient, service.networkId, seed, scan.funded, destination, test);
       if (p.destination !== destination) throw new Error('Destination changed unexpectedly. Nothing was sent.');
       setPreview(p);
       setConfirmed(false);
@@ -95,9 +99,12 @@ export function LegacyMigrate({ t, service, state }: { t: T; service: WalletServ
           scan.funded,
           destination,
           (done, total) => setProgress(`${done}/${total}`),
+          preview.test,
         );
         setTxIds(ids);
-        clearSeed(); // drop the legacy seed as soon as it is no longer needed
+        setLastWasTest(preview.test);
+        // After a test the seed is kept so the rest can be moved; after a full transfer it is dropped.
+        if (!preview.test) clearSeed();
         setStep('done');
       },
       t('legacySendFailed') + ' ',
@@ -109,6 +116,8 @@ export function LegacyMigrate({ t, service, state }: { t: T; service: WalletServ
     setPreview(undefined);
     setConfirmed(false);
     setTxIds([]);
+    setTestMode(false);
+    setLastWasTest(false);
     setError(undefined);
     setCount(DEFAULT_LEGACY_SCAN_COUNT);
     setStep('input');
@@ -162,7 +171,8 @@ export function LegacyMigrate({ t, service, state }: { t: T; service: WalletServ
               <ul className="small">
                 {scan.funded.slice(0, LISTED_ADDRESSES).map((f) => (
                   <li key={f.address}>
-                    <code>{f.path}</code> · <code>{f.address}</code> · {fmt(f.balance)}
+                    {t(f.scheme === 'cli111111' ? 'legacySchemeCli' : 'legacySchemeWeb')} · <code>{f.path}</code> ·{' '}
+                    <code>{f.address}</code> · {fmt(f.balance)}
                   </li>
                 ))}
                 {scan.funded.length > LISTED_ADDRESSES && <li>… +{scan.funded.length - LISTED_ADDRESSES}</li>}
@@ -175,13 +185,20 @@ export function LegacyMigrate({ t, service, state }: { t: T; service: WalletServ
           {count < MAX_SCAN_COUNT && (
             <button onClick={() => void doScan(Math.min(count * 2, MAX_SCAN_COUNT))}>{t('legacyScanMore')}</button>
           )}
-          {scan.matureSompi > 0n && <button onClick={() => void doPreview()}>{t('legacyPreview')}</button>}
+          {scan.matureSompi > 0n && (
+            <>
+              <p className="muted small">{t('legacyTestHint')}</p>
+              {scan.matureUtxoCount > 1 && <button onClick={() => void doPreview(true)}>{t('legacyTestPreview')}</button>}
+              <button onClick={() => void doPreview(false)}>{t('legacyPreview')}</button>
+            </>
+          )}
           <button onClick={reset}>{t('legacyBack')}</button>
         </>
       )}
 
       {step === 'preview' && preview && (
         <>
+          {testMode && <p className="muted">{t('legacyTestNote')}</p>}
           <div className="muted">{t('legacyDestination')}</div>
           <p>
             <code>{preview.destination}</code>
@@ -207,7 +224,7 @@ export function LegacyMigrate({ t, service, state }: { t: T; service: WalletServ
             <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} /> {t('legacyConfirm')}
           </label>
           <button disabled={!confirmed} onClick={() => void doSend()}>
-            {t('legacyMove')}
+            {testMode ? t('legacyTestMove') : t('legacyMove')}
           </button>
           <button onClick={() => setStep('scanned')}>{t('legacyBack')}</button>
         </>
@@ -215,7 +232,7 @@ export function LegacyMigrate({ t, service, state }: { t: T; service: WalletServ
 
       {step === 'done' && (
         <>
-          <p>{t('legacyDone')}</p>
+          <p>{lastWasTest ? t('legacyTestDone') : t('legacyDone')}</p>
           <ul className="small">
             {txIds.map((id) => (
               <li key={id}>
@@ -225,6 +242,7 @@ export function LegacyMigrate({ t, service, state }: { t: T; service: WalletServ
               </li>
             ))}
           </ul>
+          {lastWasTest && <button onClick={() => void doScan(count)}>{t('legacyScanAgain')}</button>}
           <button onClick={reset}>{t('legacyBack')}</button>
         </>
       )}
