@@ -126,7 +126,13 @@ export function LegacyMigrate({ t, service, state }: { t: T; service: WalletServ
   return (
     <div className="card">
       <h3>{t('legacyTitle')}</h3>
-      <p className="muted small">{t('legacyIntro')}</p>
+      <p>{t('legacyIntro')}</p>
+      <ul className="small">
+        <li>{t('legacyKindWeb')}</li>
+        <li>{t('legacyKindDesktop')}</li>
+        <li>{t('legacyKindCli')}</li>
+      </ul>
+      <p className="muted small">{t('legacyAuto')}</p>
       {error && <p className="error">{error}</p>}
 
       {step === 'busy' && (
@@ -246,6 +252,11 @@ export function LegacyMigrate({ t, service, state }: { t: T; service: WalletServ
           <button onClick={reset}>{t('legacyBack')}</button>
         </>
       )}
+
+      <details className="legacy-tech">
+        <summary>{t('legacyTech')}</summary>
+        <p className="muted small">{t('legacyTechText')}</p>
+      </details>
     </div>
   );
 }
