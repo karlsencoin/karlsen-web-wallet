@@ -129,6 +129,7 @@ function Onboarding({ t, service, error }: { t: T; service: WalletService; error
         </button>
         <button onClick={() => setStep('restore')}>{t('restoreWallet')}</button>
         <LegacyLink t={t} />
+        <p className="center small muted">{t('legacyRecoverHint')}</p>
       </div>
     );
   }

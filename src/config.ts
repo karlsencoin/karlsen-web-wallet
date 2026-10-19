@@ -198,7 +198,7 @@ export function hasLegacyWallet(): boolean {
 }
 
 /** App version shown on the WALLET tab (kept in sync with package.json). */
-export const APP_VERSION = '2.0.0';
+export const APP_VERSION = '2.1.0';
 
 /** Donation address shown on the WALLET tab (Karlsen development fund). */
 export const DONATION_ADDRESS = import.meta.env.VITE_DONATION_ADDRESS as string | undefined;
